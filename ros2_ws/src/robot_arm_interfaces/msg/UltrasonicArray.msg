@@ -1,0 +1,9 @@
+std_msgs/Header header
+float64 front_m
+float64 rear_m
+float64 left_m
+float64 right_m
+bool front_valid
+bool rear_valid
+bool left_valid
+bool right_valid

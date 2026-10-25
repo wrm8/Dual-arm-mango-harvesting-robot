@@ -1,0 +1,29 @@
+robot_arm_driver:
+  ros__parameters:
+    # Replace this after identifying the board with:
+    # ls -l /dev/serial/by-id/
+    serial_device: /dev/serial/by-id/usb-1a86_USB_Single_Serial_5CE5114366-if00-port0
+    use_direction_gpio: false
+    tx_enable_gpio: -1
+    rx_enable_gpio: -1
+
+    # Keep false until zero positions, directions, limits, and emergency stop
+    # have been verified with the arm mechanically supported.
+    allow_motion: false
+    read_feedback_on_start: true
+    read_feedback_on_completion: true
+    # Read-only mode is active while allow_motion is false.
+    feedback_poll_period_ms: 200
+    feedback_timeout_ms: 50
+
+    # Match the URDF names. The gripper is not part of the five-joint IK chain,
+    # but remains available to the hardware driver as a sixth servo.
+    joint_names: [joint1, joint2, joint3, joint4, joint5, gripper]
+    servo_ids: [1, 2, 3, 4, 5, 6]
+
+    # Provisional values only. Replace every item during calibration.
+    zero_ticks: [500.0, 500.0, 500.0, 500.0, 500.0, 500.0]
+    ticks_per_radian: [238.7324, 238.7324, 238.7324, 238.7324, 238.7324, 238.7324]
+    directions: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    min_ticks: [0, 0, 0, 0, 0, 0]
+    max_ticks: [1000, 1000, 1000, 1000, 1000, 1000]

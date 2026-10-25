@@ -1,0 +1,16 @@
+# Mecanum lateral movement. direction is +1 for left and -1 for right in base_link.
+int8 direction
+float64 distance_m
+float64 max_speed_mps
+float64 safety_distance_m
+---
+bool success
+uint8 reason
+string message
+float64 traveled_m
+---
+float32 progress
+string phase
+float64 left_distance_m
+float64 right_distance_m
+geometry_msgs/Twist command

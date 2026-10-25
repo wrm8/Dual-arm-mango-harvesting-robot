@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <ReactiveFallback name="mango_interrupt_has_priority">
+      <Sequence name="mango_branch">
+        <MangoReady/>
+        <StopBase/>
+        <PickMango/>
+        <!-- Returns FAILURE after latching the target as handled. This lets
+             the fallback continue with RouteStep without declaring mission
+             success for a single mango pick. -->
+        <MarkMangoHandled/>
+      </Sequence>
+      <RouteStep/>
+    </ReactiveFallback>
+  </BehaviorTree>
+</root>

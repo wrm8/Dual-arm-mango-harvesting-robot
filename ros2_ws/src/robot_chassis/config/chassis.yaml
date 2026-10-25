@@ -1,0 +1,58 @@
+base_serial_node:
+  ros__parameters:
+    # Keep both false until the STM32 protocol, port, and safety checks are verified.
+    serial_device: /dev/serial/by-id/REPLACE_WITH_STM32
+    baud_rate: 115200
+    dry_run: true
+    allow_motion: false
+    command_timeout_s: 0.20
+    publish_rate_hz: 20.0
+
+ultrasonic_node:
+  ros__parameters:
+    front_topic: /ultrasonic/front
+    rear_topic: /ultrasonic/rear
+    left_topic: /ultrasonic/left
+    right_topic: /ultrasonic/right
+    publish_rate_hz: 20.0
+    stale_timeout_s: 0.20
+
+row_navigation_node:
+  ros__parameters:
+    loop_hz: 20.0
+    sensor_timeout_s: 0.30
+    side_kp: 1.2
+    yaw_kp: 1.0
+    max_lateral_speed_mps: 0.15
+    max_yaw_rate_rad_s: 0.40
+    stop_speed_epsilon_mps: 0.03
+    stop_angular_epsilon_rad_s: 0.08
+    stop_settle_s: 0.20
+    default_front_slow_m: 0.80
+    default_front_stop_m: 0.35
+    default_safety_distance_m: 0.12
+
+mission_behavior_node:
+  ros__parameters:
+    row_count: 7
+    row_speed_mps: 0.20
+    shift_distance_m: 0.30
+    shift_speed_mps: 0.10
+    shift_direction: 1
+    row_side_target_m: 0.05
+    front_slow_distance_m: 0.80
+    front_stop_distance_m: 0.35
+    shift_safety_distance_m: 0.12
+    mango_min_confidence: 0.75
+    mango_stable_frames: 3
+    mango_timeout_s: 0.50
+    mango_rearm_delay_s: 1.0
+    mango_approach_height_m: 0.10
+    mango_grasp_offset_x_m: 0.0
+    mango_grasp_offset_y_m: 0.0
+    mango_grasp_offset_z_m: 0.0
+    mango_tool_tilt_rad: 1.5
+    mango_joint5_rad: 0.0
+    pick_duration_s: 2.0
+    pick_return_home: true
+    tick_hz: 20.0

@@ -1,0 +1,14 @@
+# Target point must already be expressed in the robot base frame.
+geometry_msgs/PointStamped target
+float64 pitch_deg
+float64 roll_deg
+float64 claw_position
+builtin_interfaces/Duration duration
+bool wait_for_completion
+---
+bool success
+string message
+geometry_msgs/PointStamped final_position
+---
+float32 progress
+string stage

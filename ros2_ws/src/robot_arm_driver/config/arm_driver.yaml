@@ -1,0 +1,24 @@
+robot_arm_driver:
+  ros__parameters:
+    # Check with `ls -l /dev/serial/by-id/` and use that stable path in production.
+    serial_device: /dev/ttyUSB0
+    # HX-30HM direct-servo protocol used by the supplied 02 motion source.
+    baud_rate: 115200
+
+    joint_names: [joint_1, joint_2, joint_3, joint_4]
+    servo_ids: [1, 2, 3, 4]
+    # Provisional calibration: HX-30HM uses 4096 encoder ticks per revolution.
+    # Replace zero_ticks and directions after mechanically setting each joint zero.
+    zero_ticks: [0.0, 0.0, 0.0, 0.0]
+    ticks_per_radian: [651.8986, 651.8986, 651.8986, 651.8986]
+    directions: [1.0, 1.0, 1.0, 1.0]
+    # HX-30HM protocol range.  Replace these with measured mechanical limits
+    # after joint-zero calibration.
+    min_ticks: [-30719, -30719, -30719, -30719]
+    max_ticks: [30719, 30719, 30719, 30719]
+    goal_speed: 100
+    goal_acceleration: 0
+    # For wait_for_completion=true, success requires every requested encoder
+    # position to be within this many ticks before duration expires.
+    position_tolerance_ticks: 20
+    enable_torque_on_start: true

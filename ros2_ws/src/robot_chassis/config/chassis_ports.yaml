@@ -1,0 +1,15 @@
+# Planning-only configuration; no chassis node is implemented until the hardware
+# serial formats and USB adapter's stable /dev/serial/by-id paths are known.
+ultrasonic_ports:
+  front_left: /dev/serial/by-id/REPLACE_ultrasonic_front_left
+  front_right: /dev/serial/by-id/REPLACE_ultrasonic_front_right
+  rear_left: /dev/serial/by-id/REPLACE_ultrasonic_rear_left
+  rear_right: /dev/serial/by-id/REPLACE_ultrasonic_rear_right
+motor_port: /dev/serial/by-id/REPLACE_motor_controller
+control:
+  loop_hz: 50.0
+  stale_sensor_timeout_s: 0.2
+  # Motor PWM protocol and tuned PID gains must be filled in from the real controller.
+  kp: 0.0
+  ki: 0.0
+  kd: 0.0

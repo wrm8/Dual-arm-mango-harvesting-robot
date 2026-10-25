@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot_arm">
+  <!--
+    This is the coordinate-frame skeleton. Replace the placeholder robot links
+    with the SolidWorks-exported links and joints after checking their axes,
+    origins, limits, inertials, visual meshes, and collision meshes.
+  -->
+  <link name="base_link"/>
+
+  <!--
+    The camera is rigidly mounted to the same mobile platform. These values are
+    placeholders and must be measured or calibrated before using camera points.
+  -->
+  <link name="camera_link"/>
+  <joint name="base_to_camera" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

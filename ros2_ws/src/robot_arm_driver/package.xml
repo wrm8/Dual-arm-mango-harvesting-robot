@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_driver</name>
+  <version>0.1.0</version>
+  <description>C++ ROS 2 driver for Hiwonder-compatible serial bus servos.</description>
+  <maintainer email="robot@example.invalid">robot_arm_jetson</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>control_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>robot_arm_interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

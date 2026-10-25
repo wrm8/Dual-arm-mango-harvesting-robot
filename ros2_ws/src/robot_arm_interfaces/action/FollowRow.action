@@ -1,0 +1,21 @@
+# Current row navigation task. The row controller keeps running until the row end,
+# cancellation, or a sensor fault. direction is +1 for forward and -1 for reverse.
+int32 row_id
+int8 direction
+float64 max_speed_mps
+float64 side_target_m
+float64 front_slow_distance_m
+float64 front_stop_distance_m
+bool use_side_centering
+---
+bool success
+uint8 reason
+string message
+float64 traveled_m
+---
+float32 progress
+string phase
+float64 front_distance_m
+float64 left_distance_m
+float64 right_distance_m
+geometry_msgs/Twist command

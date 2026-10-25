@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 日志 / 临时文件
+*.log
+*.tmp
+
+# 模型 / 大文件（按需保留）
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+
+# 编译产物
+build/
+dist/
+
+# ROS 2 工作空间专属忽略
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/

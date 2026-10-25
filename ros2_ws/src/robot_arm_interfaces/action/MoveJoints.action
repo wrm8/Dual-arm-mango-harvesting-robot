@@ -1,0 +1,15 @@
+# All positions are SI radians and each name must occur exactly once.
+string[] joint_names
+float64[] positions
+# Optional per-joint native HX-30HM goal speed (0..3400). Empty uses the
+# driver's configured goal_speed for every joint.
+uint16[] speeds
+builtin_interfaces/Duration duration
+bool wait_for_completion
+---
+bool success
+string message
+sensor_msgs/JointState final_state
+---
+float32 progress
+sensor_msgs/JointState current_state

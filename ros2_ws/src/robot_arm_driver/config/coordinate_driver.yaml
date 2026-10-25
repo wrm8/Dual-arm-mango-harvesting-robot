@@ -1,0 +1,28 @@
+robot_arm_coordinate_driver:
+  ros__parameters:
+    # This backend reproduces the protocol used by “02 程序源码”. It needs the
+    # AT32 coordinate/IK controller used by that source, not an LX-style 0x55-only bus.
+    serial_device: /dev/ttyACM1
+    baud_rate: 1000000
+    base_frame: base_link
+    require_base_frame: true
+
+    # Limits copied from the source project, expressed in metres for ROS.
+    x_min_m: 0.100
+    x_max_m: 0.400
+    y_min_m: -0.450
+    y_max_m: 0.450
+    z_min_m: 0.020
+    z_max_m: 0.500
+    default_motion_ms: 2000
+
+    # Source-project gripper defaults; verify on the real arm before running PickPoint.
+    gripper_servo_id: 6
+    gripper_open_position: 1086
+    gripper_close_position: 2418
+    gripper_speed: 2500
+    pick_pitch_deg: -90.0
+    pick_roll_deg: 0.0
+    home_x_m: 0.200
+    home_y_m: 0.0
+    home_z_m: 0.200
