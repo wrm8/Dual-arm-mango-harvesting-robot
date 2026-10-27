@@ -175,15 +175,13 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
 
     const char *ik_stage = "pregrasp";
     try {
-        // 三段式 IK（连续使用上一结果作为 seed）
-        // // 1. 预抓取点（目标上方 approach_h）
-        // auto q_pregrasp = kinematics_->inverse_xyz_tilt_joint5(
-        //     seed, target_x, target_y, target_z + approach_h, target_pitch, target_roll);
-        
-        // 2. 抓取点（目标点）
+        // Solve approach, grasp, and lift poses with continuous seeds.
+        ik_stage = "pregrasp";
+        auto q_pregrasp = kinematics_->inverse_xyz_tilt_joint5(
+            seed, target_x, target_y, target_z + approach_h, target_pitch, target_roll);
         ik_stage = "grasp";
         auto q_grasp = kinematics_->inverse_xyz_tilt_joint5(
-            seed, target_x, target_y, target_z, target_pitch, target_roll);
+            q_pregrasp, target_x, target_y, target_z, target_pitch, target_roll);
 
         const auto log_solution = [this](const char * stage, const std::vector<double> & joints) {
             const auto frame = kinematics_->forward(joints);
@@ -211,16 +209,20 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
 
         log_solution("grasp", q_grasp);
         
-        // 3. 抬起点（目标上方 approach_h）
+        // Lift back above the target after reaching the grasp pose.
         ik_stage = "lift";
         auto q_lift = kinematics_->inverse_xyz_tilt_joint5(
             q_grasp, target_x, target_y, target_z + approach_h, target_pitch, target_roll);
 
         log_solution("lift", q_lift);
 
-        // 当前只发送到抬起位置；等待控制器完成后才结束 PickPoint。
+        // Execute approach, grasp, and lift; each point takes two seconds.
         ik_stage = "trajectory execution";
-        send_trajectory(q_grasp);
+        std::vector<std::vector<double>> trajectory_points{q_pregrasp, q_grasp, q_lift};
+        if (goal->return_home) {
+            trajectory_points.emplace_back(kinematics_->joint_count(), 0.0);
+        }
+        send_trajectory(trajectory_points);
 
         // 告诉客户端成功
         auto result = std::make_shared<PickPoint::Result>();
@@ -241,7 +243,7 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
     }
 }
 
-void IkPickNode::send_trajectory(const std::vector<double> &target_joints)
+void IkPickNode::send_trajectory(const std::vector<std::vector<double>> &target_points)
 {
     if (!trajectory_client_->wait_for_action_server(std::chrono::seconds(2))) {
         throw std::runtime_error("底层控制器 /arm_controller/follow_joint_trajectory 未就绪！");
@@ -250,11 +252,12 @@ void IkPickNode::send_trajectory(const std::vector<double> &target_joints)
     FollowJointTrajectory::Goal goal;
     goal.trajectory.joint_names = kinematics_->joint_names();
 
-    trajectory_msgs::msg::JointTrajectoryPoint point;
-    point.positions = target_joints;
-    point.time_from_start = rclcpp::Duration::from_seconds(2.0); // 2秒走到位
-
-    goal.trajectory.points.push_back(point);
+    for (std::size_t i = 0; i < target_points.size(); ++i) {
+        trajectory_msgs::msg::JointTrajectoryPoint point;
+        point.positions = target_points[i];
+        point.time_from_start = rclcpp::Duration::from_seconds(2.0 * (i + 1));
+        goal.trajectory.points.push_back(point);
+    }
 
     auto goal_future = trajectory_client_->async_send_goal(goal);
     if (goal_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {

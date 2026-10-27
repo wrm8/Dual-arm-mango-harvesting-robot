@@ -19,9 +19,11 @@ class CoordinateBus
     void open();
     void send(const std::vector<uint8_t> &frame);
     std::optional<std::vector<uint8_t> > request(const std::vector<uint8_t> &frame, int timeout_ms = 50);
+    std::optional<std::vector<uint8_t> > request_v3(const std::vector<uint8_t> &frame, int timeout_ms = 50);
 
   private:
     std::optional<std::vector<uint8_t> > read_frame(int timeout_ms);
+    std::optional<std::vector<uint8_t> > read_v3_frame(int timeout_ms);
     std::string device_;
     int baud_rate_;
     int fd_{-1};

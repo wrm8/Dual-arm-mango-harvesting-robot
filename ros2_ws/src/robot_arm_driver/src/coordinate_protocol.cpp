@@ -42,6 +42,36 @@ std::vector<uint8_t> encode_at32_frame(
   return frame;
 }
 
+std::vector<uint8_t> encode_v3_frame(
+  const uint8_t id, const uint8_t command, const std::vector<uint8_t> &parameters)
+{
+  const auto length = static_cast<uint8_t>(parameters.size() + 3U);
+  uint16_t sum = static_cast<uint16_t>(id) + length + command;
+  std::vector<uint8_t> frame{0x55, 0x55, id, length, command};
+
+  for (const auto value : parameters)
+  {
+    frame.push_back(value);
+    sum += value;
+  }
+  frame.push_back(static_cast<uint8_t>(255U - (sum & 0xffU)));
+  return frame;
+}
+
+std::vector<uint8_t> encode_v3_position_command(
+  const uint8_t id, const uint16_t position, const uint16_t duration_ms)
+{
+  return encode_v3_frame(
+    id, kV3MoveTimeWriteCommand,
+    {static_cast<uint8_t>(position & 0xffU), static_cast<uint8_t>(position >> 8U),
+     static_cast<uint8_t>(duration_ms & 0xffU), static_cast<uint8_t>(duration_ms >> 8U)});
+}
+
+std::vector<uint8_t> encode_v3_stop_command(const uint8_t id)
+{
+  return encode_v3_frame(id, kV3MoveStopCommand, {});
+}
+
 std::vector<uint8_t> encode_coordinate_command(const CartesianCommand &command)
 {
   std::vector<uint8_t> payload;
@@ -56,6 +86,21 @@ std::vector<uint8_t> encode_coordinate_command(const CartesianCommand &command)
   append_i16_le(payload, command.claw_position);
   append_u16_le(payload, command.duration_ms);
   return encode_at32_frame(kCoordinateControllerId, kCoordinateSetCommand, payload);
+}
+
+int16_t decode_hx_position(const uint8_t low, const uint8_t high)
+{
+  const auto raw = static_cast<uint16_t>(low) |
+                   (static_cast<uint16_t>(high) << 8U);
+  const auto magnitude = static_cast<int16_t>(raw & 0x7fffU);
+  return (raw & 0x8000U) != 0U ? static_cast<int16_t>(-magnitude) : magnitude;
+}
+
+int16_t decode_v3_position(const uint8_t low, const uint8_t high)
+{
+  const auto raw = static_cast<uint16_t>(low) |
+                   (static_cast<uint16_t>(high) << 8U);
+  return static_cast<int16_t>(raw);
 }
 
 std::vector<uint8_t> encode_gripper_command(
@@ -109,7 +154,7 @@ std::vector<uint8_t> encode_hx_sync_position_command(const std::vector<HxPositio
 {
   if (targets.empty() || targets.size() > 30U)
   {
-    throw std::invalid_argument("HX-30HM SYNC_WRITE needs 1 to 30 targets");
+    throw std::invalid_argument("HX SYNC_WRITE needs 1 to 30 targets");
   }
   std::vector<uint8_t> payload{41, 7};
 

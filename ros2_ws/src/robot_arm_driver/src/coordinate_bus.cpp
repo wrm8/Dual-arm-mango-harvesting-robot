@@ -167,6 +167,65 @@ std::optional<std::vector<uint8_t> > CoordinateBus::read_frame(const int timeout
   return std::nullopt;
 }
 
+std::optional<std::vector<uint8_t> > CoordinateBus::read_v3_frame(const int timeout_ms)
+{
+  std::vector<uint8_t> bytes;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(fd_, &read_fds);
+    timeval timeout{static_cast<long>(remaining / 1000), static_cast<long>((remaining % 1000) * 1000)};
+    const auto ready = select(fd_ + 1, &read_fds, nullptr, nullptr, &timeout);
+    if (ready <= 0)
+    {
+      continue;
+    }
+    uint8_t byte{};
+    if (::read(fd_, &byte, 1) != 1)
+    {
+      continue;
+    }
+    bytes.push_back(byte);
+    if (bytes.size() == 1U && bytes[0] != 0x55U)
+    {
+      bytes.clear();
+      continue;
+    }
+    if (bytes.size() == 2U && bytes[1] != 0x55U)
+    {
+      bytes.clear();
+      continue;
+    }
+    if (bytes.size() >= 4U)
+    {
+      const auto expected_size = static_cast<size_t>(bytes[3]) + 3U;
+      if (bytes[3] < 3U || expected_size > 260U)
+      {
+        bytes.clear();
+        continue;
+      }
+      if (bytes.size() == expected_size)
+      {
+        uint16_t checksum = 0;
+        for (size_t i = 2; i + 1 < bytes.size(); ++i)
+        {
+          checksum += bytes[i];
+        }
+        if (bytes.back() == static_cast<uint8_t>(255U - (checksum & 0xffU)))
+        {
+          return bytes;
+        }
+        bytes.clear();
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<std::vector<uint8_t> > CoordinateBus::request(const std::vector<uint8_t> &frame, const int timeout_ms)
 {
   std::scoped_lock lock(mutex_);
@@ -193,5 +252,34 @@ std::optional<std::vector<uint8_t> > CoordinateBus::request(const std::vector<ui
   }
   tcdrain(fd_);
   return read_frame(timeout_ms);
+}
+
+std::optional<std::vector<uint8_t> > CoordinateBus::request_v3(
+  const std::vector<uint8_t> &frame, const int timeout_ms)
+{
+  std::scoped_lock lock(mutex_);
+
+  if (fd_ < 0)
+  {
+    throw std::runtime_error("coordinate bus is not open");
+  }
+  tcflush(fd_, TCIFLUSH);
+  size_t sent = 0;
+
+  while (sent < frame.size())
+  {
+    const auto count = ::write(fd_, frame.data() + sent, frame.size() - sent);
+    if (count < 0)
+    {
+      if (errno == EINTR)
+      {
+        continue;
+      }
+      throw std::runtime_error("serial write failed: " + std::string(std::strerror(errno)));
+    }
+    sent += static_cast<size_t>(count);
+  }
+  tcdrain(fd_);
+  return read_v3_frame(timeout_ms);
 }
 }  // namespace robot_arm_driver

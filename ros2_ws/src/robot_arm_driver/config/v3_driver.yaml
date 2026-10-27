@@ -2,7 +2,7 @@ robot_arm_driver:
   ros__parameters:
     # Replace this after identifying the board with:
     # ls -l /dev/serial/by-id/
-    serial_device: /dev/serial/by-id/usb-1a86_USB_Single_Serial_5CE5114366-if00-port0
+    serial_device: /dev/ttyCH343USB0
     use_direction_gpio: false
     tx_enable_gpio: -1
     rx_enable_gpio: -1

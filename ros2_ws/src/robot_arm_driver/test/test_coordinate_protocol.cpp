@@ -38,3 +38,34 @@ TEST(CoordinateProtocol, EncodesSignedHxPositionAndTorque)
   EXPECT_EQ(robot_arm_driver::encode_hx_sync_position_command({{2, 100, 100, 0}, {3, 200, 100, 0}}),
             (std::vector<uint8_t>{0xff, 0xff, 0xfe, 20, 131, 41, 7, 2, 0, 100, 0, 0, 0, 100, 0, 3, 0, 200, 0, 0, 0, 100, 0, 65}));
 }
+
+TEST(CoordinateProtocol, DecodesHxSignedMagnitudePosition)
+{
+  EXPECT_EQ(robot_arm_driver::decode_hx_position(100, 0), 100);
+  EXPECT_EQ(robot_arm_driver::decode_hx_position(0xb8, 0x8b), -3000);
+  EXPECT_EQ(robot_arm_driver::decode_hx_position(0xff, 0x7f), 32767);
+  EXPECT_EQ(robot_arm_driver::decode_hx_position(0xff, 0xff), -32767);
+}
+
+TEST(CoordinateProtocol, EncodesDocumentedPresentPositionRead)
+{
+  EXPECT_EQ(
+    robot_arm_driver::encode_at32_frame(
+      1, robot_arm_driver::kHxRead,
+      {robot_arm_driver::kPresentPositionL, robot_arm_driver::kPresentPositionSize}),
+    (std::vector<uint8_t>{0xff, 0xff, 1, 4, 2, 0x38, 2, 0xbe}));
+}
+
+TEST(CoordinateProtocol, EncodesV3PositionRead)
+{
+  EXPECT_EQ(
+    robot_arm_driver::encode_v3_frame(5, robot_arm_driver::kV3PositionReadCommand, {}),
+    (std::vector<uint8_t>{0x55, 0x55, 5, 3, 28, 0xdb}));
+  EXPECT_EQ(
+    robot_arm_driver::encode_v3_position_command(5, 500, 1000),
+    (std::vector<uint8_t>{0x55, 0x55, 5, 7, 1, 0xf4, 0x01, 0xe8, 0x03, 0x12}));
+  EXPECT_EQ(robot_arm_driver::encode_v3_stop_command(5),
+            (std::vector<uint8_t>{0x55, 0x55, 5, 3, 12, 0xeb}));
+  EXPECT_EQ(robot_arm_driver::decode_v3_position(0xe8, 0x03), 1000);
+  EXPECT_EQ(robot_arm_driver::decode_v3_position(0xf4, 0x01), 500);
+}

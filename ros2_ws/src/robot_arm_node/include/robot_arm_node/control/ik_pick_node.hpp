@@ -44,7 +44,7 @@ private:
     void robot_description_callback(const std_msgs::msg::String::SharedPtr message);
     void joint_state_callback(const sensor_msgs::msg::JointState::SharedPtr message);
     void execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle);
-    void send_trajectory(const std::vector<double> &target_joints);
+    void send_trajectory(const std::vector<std::vector<double>> &target_points);
 
     std::unique_ptr<motion::UrdfKinematics> kinematics_;
 

@@ -7,11 +7,17 @@ namespace robot_arm_driver
 {
 constexpr uint8_t kCoordinateControllerId = 0xff;
 constexpr uint8_t kServoBroadcastId = 0xfe;
+constexpr uint8_t kHxRead = 2;
 constexpr uint8_t kCoordinateSetCommand = 8;
 constexpr uint8_t kServoWriteCommand = 3;
 constexpr uint8_t kServoRegWriteCommand = 4;
 constexpr uint8_t kServoActionCommand = 5;
 constexpr uint8_t kServoSyncWriteCommand = 131;
+constexpr uint8_t kPresentPositionL = 56;
+constexpr uint8_t kPresentPositionSize = 2;
+constexpr uint8_t kV3PositionReadCommand = 28;
+constexpr uint8_t kV3MoveTimeWriteCommand = 1;
+constexpr uint8_t kV3MoveStopCommand = 12;
 
 struct CartesianCommand
 {
@@ -34,9 +40,16 @@ struct HxPositionTarget
 
 std::vector<uint8_t> encode_at32_frame(uint8_t id, uint8_t command,
                                        const std::vector<uint8_t> &payload);
+std::vector<uint8_t> encode_v3_frame(uint8_t id, uint8_t command,
+                                     const std::vector<uint8_t> &parameters);
+std::vector<uint8_t> encode_v3_position_command(uint8_t id, uint16_t position,
+                                                uint16_t duration_ms);
+std::vector<uint8_t> encode_v3_stop_command(uint8_t id);
 std::vector<uint8_t> encode_coordinate_command(const CartesianCommand &command);
-// HX-30HM direct-servo commands.  Position is signed (two's complement) and
-// the bus runs at 1 Mbps by default.
+int16_t decode_hx_position(uint8_t low, uint8_t high);
+int16_t decode_v3_position(uint8_t low, uint8_t high);
+// HX-HM direct-servo commands. Position uses the sign-bit plus magnitude
+// encoding used by the original HX firmware; the bus rate is configurable.
 std::vector<uint8_t> encode_hx_torque_command(uint8_t servo_id, bool enabled);
 std::vector<uint8_t> encode_hx_mode_command(uint8_t servo_id, uint8_t mode);
 std::vector<uint8_t> encode_hx_position_command(

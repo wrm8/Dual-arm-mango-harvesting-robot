@@ -16,7 +16,7 @@ def generate_launch_description():
         description_share, "urdf", "imported", "arm_urdf_v1.urdf"
     )
     default_driver_params = os.path.join(
-        driver_share, "config", "v3_driver.yaml"
+        driver_share, "config", "arm_driver.yaml"
     )
 
     with open(default_description, "r", encoding="utf-8") as urdf_file:
@@ -37,7 +37,7 @@ def generate_launch_description():
             ),
             Node(
                 package="robot_arm_driver",
-                executable="robot_arm_driver_node",
+                executable="robot_arm_hx_driver_node",
                 name="robot_arm_driver",
                 output="screen",
                 parameters=[
