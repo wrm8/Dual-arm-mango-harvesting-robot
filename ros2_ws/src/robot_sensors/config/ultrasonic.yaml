@@ -1,0 +1,26 @@
+ultrasonic_node:
+  ros__parameters:
+    # DYP-A21 UART defaults from the product specification. Confirm register 0x0209.
+    serial_enabled: true
+    serial_baud_rate: 115200
+    uart_output_mode: auto
+    controlled_trigger_period_s: 0.20
+    distance_unit: mm
+    serial_read_buffer_size: 128
+    serial_min_range_m: 0.03
+    serial_max_range_m: 5.0
+    field_of_view_rad: 1.22  # 70 degrees; adjust to the configured A21 angle level
+    front_serial_device: /dev/ttyCH9344USB0
+    rear_serial_device: /dev/ttyCH9344USB1
+    left_serial_device: /dev/ttyCH9344USB2
+    right_serial_device: /dev/ttyCH9344USB3
+    front_frame_id: ultrasonic_front_link
+    rear_frame_id: ultrasonic_rear_link
+    left_frame_id: ultrasonic_left_link
+    right_frame_id: ultrasonic_right_link
+    front_topic: /ultrasonic/front
+    rear_topic: /ultrasonic/rear
+    left_topic: /ultrasonic/left
+    right_topic: /ultrasonic/right
+    publish_rate_hz: 20.0
+    stale_timeout_s: 0.60

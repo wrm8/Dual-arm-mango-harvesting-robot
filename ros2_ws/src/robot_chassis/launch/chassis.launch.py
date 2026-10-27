@@ -5,17 +5,26 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     share = get_package_share_directory("robot_chassis")
+    sensors_share = get_package_share_directory("robot_sensors")
     default_params = os.path.join(share, "config", "chassis.yaml")
     default_tree = os.path.join(share, "config", "mission_tree.xml")
+    default_sensor_params = os.path.join(sensors_share, "config", "ultrasonic.yaml")
 
     return LaunchDescription(
         [
             DeclareLaunchArgument("params_file", default_value=default_params),
             DeclareLaunchArgument("tree_file", default_value=default_tree),
+            DeclareLaunchArgument("sensor_params_file", default_value=default_sensor_params),
+            DeclareLaunchArgument(
+                "serial_enabled",
+                default_value="true",
+                description="Read DYP-A21 sensors from CH9344 UART devices",
+            ),
             Node(
                 package="robot_chassis",
                 executable="base_serial_node",
@@ -24,11 +33,18 @@ def generate_launch_description():
                 parameters=[LaunchConfiguration("params_file")],
             ),
             Node(
-                package="robot_chassis",
+                package="robot_sensors",
                 executable="ultrasonic_node",
                 name="ultrasonic_node",
                 output="screen",
-                parameters=[LaunchConfiguration("params_file")],
+                parameters=[
+                    LaunchConfiguration("sensor_params_file"),
+                    {
+                        "serial_enabled": ParameterValue(
+                            LaunchConfiguration("serial_enabled"), value_type=bool
+                        )
+                    },
+                ],
             ),
             Node(
                 package="robot_chassis",

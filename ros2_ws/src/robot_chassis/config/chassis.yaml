@@ -8,15 +8,6 @@ base_serial_node:
     command_timeout_s: 0.20
     publish_rate_hz: 20.0
 
-ultrasonic_node:
-  ros__parameters:
-    front_topic: /ultrasonic/front
-    rear_topic: /ultrasonic/rear
-    left_topic: /ultrasonic/left
-    right_topic: /ultrasonic/right
-    publish_rate_hz: 20.0
-    stale_timeout_s: 0.20
-
 row_navigation_node:
   ros__parameters:
     loop_hz: 20.0

@@ -23,13 +23,6 @@ target_include_directories(base_serial_node PRIVATE include)
 ament_target_dependencies(base_serial_node
   geometry_msgs nav_msgs rclcpp robot_arm_interfaces sensor_msgs)
 
-add_executable(ultrasonic_node
-  src/ultrasonic_node.cpp
-)
-target_include_directories(ultrasonic_node PRIVATE include)
-ament_target_dependencies(ultrasonic_node
-  rclcpp robot_arm_interfaces sensor_msgs)
-
 add_executable(row_navigation_node
   src/row_navigation_node.cpp
 )
@@ -46,7 +39,6 @@ ament_target_dependencies(mission_behavior_node
 
 install(TARGETS
   base_serial_node
-  ultrasonic_node
   row_navigation_node
   mission_behavior_node
   DESTINATION lib/${PROJECT_NAME})

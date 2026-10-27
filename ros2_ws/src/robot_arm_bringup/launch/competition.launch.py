@@ -33,6 +33,13 @@ def generate_launch_description():
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(chassis_launch),
+                launch_arguments={"serial_enabled": "false"}.items(),
+                condition=IfCondition(LaunchConfiguration("use_sim")),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(chassis_launch),
+                launch_arguments={"serial_enabled": "true"}.items(),
+                condition=UnlessCondition(LaunchConfiguration("use_sim")),
             ),
             # sim.launch.py starts robot_state_publisher but not the IK action
             # server. The real launch already starts it, so this node is only
