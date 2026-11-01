@@ -1,6 +1,7 @@
 #pragma once
 
 #include "robot_arm_interfaces/msg/base_state.hpp"
+#include "robot_arm_interfaces/msg/wheel_state.hpp"
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -8,7 +9,9 @@
 #include <sensor_msgs/msg/imu.hpp>
 
 #include <atomic>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -29,7 +32,7 @@ private:
   void publish_state();
   void open_serial();
   void close_serial();
-  void write_command(const geometry_msgs::msg::Twist &command);
+  void write_wheel_command(const std::array<double, 4> &wheel_speed_mps);
   void send_zero_once();
 
   std::string serial_device_;
@@ -38,6 +41,13 @@ private:
   bool allow_motion_{false};
   double command_timeout_s_{0.2};
   double publish_rate_hz_{20.0};
+  double wheel_diameter_m_{0.075};
+  double wheel_base_m_{0.170};
+  double track_width_m_{0.186};
+  double encoder_counts_per_wheel_rev_{1560.0};
+  double max_wheel_speed_mps_{1.0};
+  double feedback_timeout_s_{0.3};
+  std::array<double, 4> wheel_sign_{{1.0, 1.0, 1.0, 1.0}};
 
   int fd_{-1};
   std::atomic_bool running_{false};
@@ -56,11 +66,19 @@ private:
   double y_m_{0.0};
   double yaw_rad_{0.0};
   double gyro_z_rad_s_{0.0};
+  std::array<double, 4> wheel_speed_mps_{{0.0, 0.0, 0.0, 0.0}};
+  std::array<double, 4> wheel_position_m_{{0.0, 0.0, 0.0, 0.0}};
+  std::array<int32_t, 4> wheel_encoder_delta_{{0, 0, 0, 0}};
+  bool have_feedback_{false};
+  bool have_previous_yaw_{false};
+  double previous_yaw_rad_{0.0};
+  std::chrono::steady_clock::time_point last_feedback_time_{};
   bool have_odom_{false};
   bool have_imu_{false};
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr command_sub_;
   rclcpp::Publisher<robot_arm_interfaces::msg::BaseState>::SharedPtr state_pub_;
+  rclcpp::Publisher<robot_arm_interfaces::msg::WheelState>::SharedPtr wheel_state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;

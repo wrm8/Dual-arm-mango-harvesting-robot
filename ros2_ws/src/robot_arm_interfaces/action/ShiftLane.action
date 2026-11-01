@@ -1,8 +1,17 @@
 # Mecanum lateral movement. direction is +1 for left and -1 for right in base_link.
+uint8 WALL_NONE=0
+uint8 WALL_FRONT=1
+uint8 WALL_REAR=2
 int8 direction
 float64 distance_m
 float64 max_speed_mps
 float64 safety_distance_m
+uint8 wall_sensor
+float64 wall_target_m
+float64 wall_enable_tolerance_m
+bool disable_wall_control_on_side_distance
+float64 wall_control_cancel_side_distance_m
+float64 wall_control_cancel_side_tolerance_m
 ---
 bool success
 uint8 reason

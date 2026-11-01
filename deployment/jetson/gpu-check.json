@@ -1,0 +1,19 @@
+{
+  "python": "3.10.12",
+  "platform": "Linux-5.15.185-tegra-aarch64-with-glibc2.35",
+  "torch": "2.11.0",
+  "torchvision": "0.26.0",
+  "ultralytics": "8.4.148",
+  "opencv": "4.8.1",
+  "numpy": "1.26.4",
+  "cuda_runtime": "12.6",
+  "cuda_available": true,
+  "device": "cuda:0",
+  "gpu": "Orin",
+  "checks": [
+    "imports",
+    "convolution_backward",
+    "torchvision_nms",
+    "yolo11_segmentation_forward_backward"
+  ]
+}

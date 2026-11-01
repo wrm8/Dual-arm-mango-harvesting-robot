@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/UltrasonicArray.msg"
   "msg/MangoTarget.msg"
   "msg/BaseState.msg"
+  "msg/WheelState.msg"
   "action/MoveJoints.action"
   "action/MoveCartesian.action"
   "action/PickPoint.action"

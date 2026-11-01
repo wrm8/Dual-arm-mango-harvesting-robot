@@ -1,0 +1,14 @@
+# Jetson Orin: JetPack 6 / CUDA 12.6 / CPython 3.10.
+# Install torch and torchvision separately from the Jetson index, never this WSL lock.
+numpy==1.26.4
+opencv-python==4.8.1.78
+scipy==1.15.3
+ultralytics==8.4.148
+pyrealsense2==2.59.1.11053
+# cuDSS is installed separately with --no-deps by setup_jetson.sh.
+# Its PyPI extras otherwise install SBSA cuBLAS, incompatible with this Jetson.
+cuda-toolkit==12.6.3
+cffi==2.1.1
+setuptools==78.1.0
+torch==2.11.0
+torchvision==0.26.0

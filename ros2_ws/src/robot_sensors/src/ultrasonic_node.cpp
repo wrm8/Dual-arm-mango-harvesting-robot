@@ -13,6 +13,12 @@
 
 namespace robot_sensors
 {
+namespace
+{
+constexpr double kNavigationMaxDistanceM = 5.0;  // 500 cm minimum distance for navigation
+constexpr double kNearInvalidDistanceM = 0.02;  // 2 cm minimum distance for navigation
+}
+
 UltrasonicNode::UltrasonicNode() : Node("ultrasonic_node")
 {
   declare_parameter("serial_enabled", true);
@@ -294,9 +300,35 @@ void UltrasonicNode::parse_serial_channel(const std::size_t index)
     const bool sensor_status_frame = distance_raw == 0xfffdU || distance_raw == 0xfffeU;
     {
       std::scoped_lock lock(mutex_);
-      channel.reading.value_m = distance_m;
-      channel.reading.valid = !sensor_status_frame && distance_m >= serial_min_range_m_ &&
+      const bool finite_distance = std::isfinite(distance_m);
+
+      // 有效且处于正常范围内
+      const bool measurement_in_range =
+        !sensor_status_frame &&
+        finite_distance &&
+        distance_m >= kNearInvalidDistanceM &&
         distance_m <= serial_max_range_m_;
+
+      // 有限数值，但太近，认为是近距离无效
+      const bool near_invalid =
+        !sensor_status_frame &&
+        finite_distance &&
+        distance_m > 0.0 &&
+        distance_m < kNearInvalidDistanceM;
+
+      if (near_invalid) {
+        // 近距离无效：固定为最小可靠距离
+        channel.reading.value_m = kNearInvalidDistanceM;
+      } else if (measurement_in_range) {
+        // 正常距离：超过 2 米时截断为 2 米
+        channel.reading.value_m =
+          std::min(distance_m, kNavigationMaxDistanceM);
+      } else {
+        // 无回波、状态帧、远距离超量程：认为前方没有近距离障碍物
+        channel.reading.value_m = kNavigationMaxDistanceM;
+      }
+
+      channel.reading.valid = true;
       channel.reading.stamp = std::chrono::steady_clock::now();
     }
     channel.receive_buffer.erase(0, kFrameSize);
@@ -307,8 +339,30 @@ UltrasonicNode::Reading UltrasonicNode::convert(const sensor_msgs::msg::Range &m
 {
   Reading reading;
   reading.value_m = static_cast<double>(message.range);
-  reading.valid = std::isfinite(reading.value_m) && reading.value_m >= message.min_range &&
-    reading.value_m <= message.max_range;
+  const bool finite_distance = std::isfinite(reading.value_m);
+
+  if (finite_distance &&
+      reading.value_m > 0.0 &&
+      reading.value_m < kNearInvalidDistanceM)
+  {
+    // 近距离无效
+    reading.value_m = kNearInvalidDistanceM;
+  }
+  else if (finite_distance &&
+          reading.value_m >= kNearInvalidDistanceM &&
+          reading.value_m <= message.max_range)
+  {
+    // 正常距离，最大限制为 2 米
+    reading.value_m =
+      std::min(reading.value_m, kNavigationMaxDistanceM);
+  }
+  else
+  {
+    // 无回波、NaN、远距离无效
+    reading.value_m = kNavigationMaxDistanceM;
+  }
+
+  reading.valid = true;
   reading.stamp = std::chrono::steady_clock::now();
   return reading;
 }

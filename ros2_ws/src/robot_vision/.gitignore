@@ -1,0 +1,6 @@
+# Training assets stay local; deploy weights separately from Git.
+yolo_mango/datasets/
+yolo_mango/runs/
+yolo_mango/outputs/
+models/*.pt
+config/camera_to_base.json

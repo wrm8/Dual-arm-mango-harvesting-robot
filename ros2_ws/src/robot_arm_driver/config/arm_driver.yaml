@@ -1,7 +1,7 @@
 robot_arm_driver:
   ros__parameters:
     # Check with `ls -l /dev/serial/by-id/` and use that stable path in production.
-    serial_device: /dev/ttyCH343USB0
+    serial_device: /dev/robot_arm
     # HX-HM direct-servo protocol used by the supplied 02 motion source.
     baud_rate: 115200
 

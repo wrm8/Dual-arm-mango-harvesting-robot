@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['green mango', 'trunk', 'yellow mango']
+
+roboflow:
+  workspace: wangrunmin
+  project: xiong-mango-1
+  version: 1
+  license: Private
+  url: https://app.roboflow.com/wangrunmin/xiong-mango-1/1

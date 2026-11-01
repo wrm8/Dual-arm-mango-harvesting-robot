@@ -1,0 +1,8 @@
+{
+  "best.pt": {
+    "sha256": "4634485486b23499e6d23ae35d34e86f1289fc216f069c330981cc7632e8321d",
+    "source": "yolo_mango-main/runs/segment/mango/weights/best.pt",
+    "task": "segment",
+    "classes": {"0":"green_mango", "1":"tree_trunk", "2":"yellow_mango"}
+  }
+}

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+runs/
+outputs/
+*.pt
+datasets/mango/images/*/*
+datasets/mango/labels/*/*
+!**/.gitkeep
+.venv-test/
+.venv.broken.*/
+*:Zone.Identifier
+get-pip.*.py

@@ -17,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace robot_chassis
 {
@@ -76,7 +77,8 @@ public:
 
   BT::NodeStatus tick() override
   {
-    return node_->latch_mango_if_ready() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    return node_->current_step_mango_interruptible() && node_->latch_mango_if_ready() ?
+      BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
   }
 
 private:
@@ -195,7 +197,8 @@ private:
       goal.side_target_m = route.side_target_m;
       goal.front_slow_distance_m = route.front_slow_distance_m;
       goal.front_stop_distance_m = route.front_stop_distance_m;
-      goal.use_side_centering = true;
+      goal.use_side_centering = route.use_side_centering;
+      goal.reverse_stop_on_zero_velocity = route.reverse_stop_on_zero_velocity;
       auto options = FollowClient::SendGoalOptions();
       options.goal_response_callback = [this](FollowGoalHandle::SharedPtr handle) {
         std::scoped_lock lock(mutex_);
@@ -244,6 +247,15 @@ private:
     goal.distance_m = route.shift_distance_m;
     goal.max_speed_mps = route.shift_speed_mps;
     goal.safety_distance_m = route.shift_safety_distance_m;
+    goal.wall_sensor = route.shift_wall_sensor;
+    goal.wall_target_m = route.shift_wall_target_m;
+    goal.wall_enable_tolerance_m = route.shift_wall_enable_tolerance_m;
+    goal.disable_wall_control_on_side_distance =
+      route.shift_disable_wall_control_on_side_distance;
+    goal.wall_control_cancel_side_distance_m =
+      route.shift_wall_control_cancel_side_distance_m;
+    goal.wall_control_cancel_side_tolerance_m =
+      route.shift_wall_control_cancel_side_tolerance_m;
     auto options = ShiftClient::SendGoalOptions();
     options.goal_response_callback = [this](ShiftGoalHandle::SharedPtr handle) {
       std::scoped_lock lock(mutex_);
@@ -404,6 +416,8 @@ private:
     if (!client_->action_server_is_ready()) {
       return BT::NodeStatus::RUNNING;
     }
+    // StopBase has just completed; use the newest stable camera frame available now.
+    node_->refresh_latched_mango();
     const auto target = node_->latched_mango();
     PickPoint::Goal goal;
     goal.target.header = target.header;
@@ -515,18 +529,37 @@ private:
 MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
 {
   declare_parameter("row_count", 7);
+  declare_parameter("step_count", 15);
   declare_parameter("row_speed_mps", 0.20);
   declare_parameter("shift_distance_m", 0.30);
   declare_parameter("shift_speed_mps", 0.10);
-  declare_parameter("shift_direction", 1);
   declare_parameter("row_side_target_m", 0.05);
-  declare_parameter("front_slow_distance_m", 0.80);
-  declare_parameter("front_stop_distance_m", 0.35);
-  declare_parameter("shift_safety_distance_m", 0.12);
+  declare_parameter("front_slow_distance_m", 0.30);
+  declare_parameter("front_stop_distance_m", 0.05);
+  declare_parameter("shift_safety_distance_m", 0.05);
+  declare_parameter("reverse_distance_m", 0.70);
+  declare_parameter("shift_by_side_wall", true);
+  declare_parameter("hold_front_distance", true);
+  declare_parameter("shift_front_target_m", 0.05);
+  declare_parameter("shift_side_slow_distance_m", 0.20);
+  declare_parameter("shift_wall_target_m", 0.05);
+  declare_parameter("shift_wall_enable_tolerance_m", 0.10);
+  declare_parameter("shift_disable_wall_control_on_side_distance", false);
+  declare_parameter("shift_wall_control_cancel_side_distance_m", 0.25);
+  declare_parameter("shift_wall_control_cancel_side_tolerance_m", 0.02);
+  declare_parameter("reverse_stop_on_zero_velocity", false);
+  for (int step = 1; step <= 7; ++step) {
+    declare_parameter("shift_wall_sensor_step_" + std::to_string(step), 1);
+    declare_parameter("shift_wall_cancel_step_" + std::to_string(step), false);
+    declare_parameter("reverse_stop_zero_step_" + std::to_string(step), false);
+  }
   declare_parameter("mango_min_confidence", 0.75);
   declare_parameter("mango_stable_frames", 3);
   declare_parameter("mango_timeout_s", 0.5);
   declare_parameter("mango_rearm_delay_s", 1.0);
+  declare_parameter("mango_min_distance_m", 0.30);
+  declare_parameter("mango_max_distance_m", 1.50);
+  declare_parameter("mango_center_tolerance_m", 0.10);
   declare_parameter("mango_approach_height_m", 0.10);
   declare_parameter("mango_grasp_offset_x_m", 0.0);
   declare_parameter("mango_grasp_offset_y_m", 0.0);
@@ -538,24 +571,43 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
   declare_parameter("tree_file", "");
   declare_parameter("tick_hz", 20.0);
 
-  route_.row_count = get_parameter("row_count").as_int();
+  route_.step_count = get_parameter("step_count").as_int();
   route_.row_speed_mps = get_parameter("row_speed_mps").as_double();
   route_.shift_distance_m = get_parameter("shift_distance_m").as_double();
   route_.shift_speed_mps = get_parameter("shift_speed_mps").as_double();
-  route_.shift_direction = static_cast<int8_t>(get_parameter("shift_direction").as_int());
+  route_.shift_direction = -1;
   route_.side_target_m = get_parameter("row_side_target_m").as_double();
   route_.front_slow_distance_m = get_parameter("front_slow_distance_m").as_double();
   route_.front_stop_distance_m = get_parameter("front_stop_distance_m").as_double();
   route_.shift_safety_distance_m = get_parameter("shift_safety_distance_m").as_double();
+  route_.reverse_distance_m = get_parameter("reverse_distance_m").as_double();
+  route_.shift_by_side_wall = get_parameter("shift_by_side_wall").as_bool();
+  route_.hold_front_distance = get_parameter("hold_front_distance").as_bool();
+  route_.shift_front_target_m = get_parameter("shift_front_target_m").as_double();
+  route_.shift_wall_target_m = get_parameter("shift_wall_target_m").as_double();
+  route_.shift_wall_enable_tolerance_m =
+    get_parameter("shift_wall_enable_tolerance_m").as_double();
+  route_.shift_disable_wall_control_on_side_distance =
+    get_parameter("shift_disable_wall_control_on_side_distance").as_bool();
+  route_.shift_wall_control_cancel_side_distance_m =
+    get_parameter("shift_wall_control_cancel_side_distance_m").as_double();
+  route_.shift_wall_control_cancel_side_tolerance_m =
+    get_parameter("shift_wall_control_cancel_side_tolerance_m").as_double();
+  route_.reverse_stop_on_zero_velocity =
+    get_parameter("reverse_stop_on_zero_velocity").as_bool();
   mango_min_confidence_ = get_parameter("mango_min_confidence").as_double();
   mango_stable_frames_ = get_parameter("mango_stable_frames").as_int();
   mango_timeout_s_ = get_parameter("mango_timeout_s").as_double();
   mango_rearm_delay_s_ = get_parameter("mango_rearm_delay_s").as_double();
+  mango_min_distance_m_ = get_parameter("mango_min_distance_m").as_double();
+  mango_max_distance_m_ = get_parameter("mango_max_distance_m").as_double();
+  mango_center_tolerance_m_ = get_parameter("mango_center_tolerance_m").as_double();
 
-  if (route_.row_count <= 0 || route_.direction != 1 || route_.shift_direction == 0 ||
+  if (route_.step_count != 15 || route_.direction != 1 ||
       route_.row_speed_mps <= 0.0 || route_.shift_distance_m <= 0.0 ||
       route_.shift_speed_mps <= 0.0 || route_.front_slow_distance_m <= route_.front_stop_distance_m ||
-      mango_stable_frames_ <= 0) {
+      route_.reverse_distance_m <= 0.0 || mango_stable_frames_ <= 0 ||
+      mango_min_distance_m_ <= 0.0 || mango_max_distance_m_ <= mango_min_distance_m_) {
     throw std::invalid_argument("invalid mission behavior parameters");
   }
 
@@ -595,7 +647,7 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
     std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::duration<double>(1.0 / tick_hz)),
     [this]() { tick_tree(); });
-  RCLCPP_INFO(get_logger(), "BehaviorTree mission ready: seven-row route with mango interruption");
+  RCLCPP_INFO(get_logger(), "BehaviorTree mission ready: explicit 15-step route with restartable mango interruption");
 }
 
 void MissionBehaviorNode::mango_callback(
@@ -606,6 +658,7 @@ void MissionBehaviorNode::mango_callback(
   latest_mango_ = *message;
   latest_mango_time_ = now;
   if (!message->valid || !std::isfinite(message->confidence) ||
+      !mango_geometry_is_usable(*message) ||
       message->confidence < mango_min_confidence_) {
     stable_count_ = 0;
     target_valid_ = false;
@@ -645,6 +698,9 @@ bool MissionBehaviorNode::latch_mango_if_ready()
   if (!target_valid_ || stable_count_ < mango_stable_frames_) {
     return false;
   }
+  if (!mango_geometry_is_usable(latest_mango_)) {
+    return false;
+  }
   const auto now = std::chrono::steady_clock::now();
   if (std::chrono::duration<double>(now - latest_mango_time_).count() > mango_timeout_s_) {
     return false;
@@ -660,6 +716,26 @@ bool MissionBehaviorNode::latch_mango_if_ready()
     latched_mango_.center.x, latched_mango_.center.y, latched_mango_.center.z,
     static_cast<double>(latched_mango_.confidence));
   return true;
+}
+
+bool MissionBehaviorNode::mango_geometry_is_usable(
+  const robot_arm_interfaces::msg::MangoTarget &message) const
+{
+  // Existing MangoTarget has no explicit range field. In base_link, x is the
+  // forward distance and y is the lateral error; z is the target height.
+  return std::isfinite(message.center.x) && std::isfinite(message.center.y) &&
+         std::isfinite(message.center.z) &&
+         message.center.x >= mango_min_distance_m_ &&
+         message.center.x <= mango_max_distance_m_ &&
+         std::abs(message.center.y) <= mango_center_tolerance_m_;
+}
+
+void MissionBehaviorNode::refresh_latched_mango()
+{
+  std::scoped_lock lock(mutex_);
+  if (target_valid_ && mango_geometry_is_usable(latest_mango_)) {
+    latched_mango_ = latest_mango_;
+  }
 }
 
 robot_arm_interfaces::msg::MangoTarget MissionBehaviorNode::latched_mango() const
@@ -705,7 +781,46 @@ void MissionBehaviorNode::set_mission_fault(const std::string &message)
 MissionBehaviorNode::RouteParameters MissionBehaviorNode::route_parameters() const
 {
   std::scoped_lock lock(mutex_);
-  return route_;
+  auto route = route_;
+  route.step_index = route_.step_index;
+  route.direction = route_.step_index == 0 ? 1 : -1;
+  route.mango_interruptible = route_.step_index != 1 && route_.step_index != 13;
+  route.use_side_centering = true;
+
+  // Read these parameters for every new action so rqt/ros2 param changes
+  // take effect on the next route segment.
+  route.shift_wall_target_m = get_parameter("shift_wall_target_m").as_double();
+  route.shift_wall_enable_tolerance_m =
+    get_parameter("shift_wall_enable_tolerance_m").as_double();
+  route.shift_disable_wall_control_on_side_distance =
+    get_parameter("shift_disable_wall_control_on_side_distance").as_bool();
+  route.shift_wall_control_cancel_side_distance_m =
+    get_parameter("shift_wall_control_cancel_side_distance_m").as_double();
+  route.shift_wall_control_cancel_side_tolerance_m =
+    get_parameter("shift_wall_control_cancel_side_tolerance_m").as_double();
+  route.reverse_stop_on_zero_velocity =
+    get_parameter("reverse_stop_on_zero_velocity").as_bool();
+
+  if (route_.step_index % 2 == 1) {
+    const auto shift_index = static_cast<std::size_t>((route_.step_index - 1) / 2);
+    route.shift_direction =
+      (route_.step_index == 14 || route_.step_index % 4 == 3) ? 1 : -1;
+
+    const auto step_number = shift_index + 1;
+    const auto sensor_value =
+      get_parameter("shift_wall_sensor_step_" + std::to_string(step_number)).as_int();
+    route.shift_wall_sensor =
+      static_cast<uint8_t>(sensor_value < 0 ? 0 : sensor_value > 2 ? 2 : sensor_value);
+    route.shift_disable_wall_control_on_side_distance =
+      get_parameter("shift_wall_cancel_step_" + std::to_string(step_number)).as_bool();
+  } else if (route_.step_index >= 2) {
+    const auto reverse_index = static_cast<std::size_t>((route_.step_index - 2) / 2);
+    const auto step_number = reverse_index + 1;
+    route.reverse_stop_on_zero_velocity =
+      get_parameter("reverse_stop_zero_step_" + std::to_string(step_number)).as_bool();
+  }
+
+  return route;
 }
 
 bool MissionBehaviorNode::route_complete() const
@@ -717,27 +832,35 @@ bool MissionBehaviorNode::route_complete() const
 bool MissionBehaviorNode::next_action_is_shift() const
 {
   std::scoped_lock lock(mutex_);
-  return next_action_shift_;
+  // The 15-step route is: forward, then seven alternating shifts/reverses,
+  // ending with the final 70 cm reverse.
+  return route_.step_index % 2 == 1;
+}
+
+bool MissionBehaviorNode::current_step_mango_interruptible() const
+{
+  std::scoped_lock lock(mutex_);
+  return route_.step_index != 1 && route_.step_index != 13;
 }
 
 void MissionBehaviorNode::follow_completed()
 {
   std::scoped_lock lock(mutex_);
-  if (route_.row_index >= route_.row_count - 1) {
+  ++route_.step_index;
+  RCLCPP_INFO(get_logger(), "route step completed; next step index=%d", route_.step_index);
+  if (route_.step_index >= route_.step_count) {
     route_complete_ = true;
-    RCLCPP_INFO(get_logger(), "all rows completed");
-    return;
   }
-  next_action_shift_ = true;
 }
 
 void MissionBehaviorNode::shift_completed()
 {
   std::scoped_lock lock(mutex_);
-  ++route_.row_index;
-  route_.direction = static_cast<int8_t>(-route_.direction);
-  route_.shift_direction = static_cast<int8_t>(-route_.shift_direction);
-  next_action_shift_ = false;
+  ++route_.step_index;
+  RCLCPP_INFO(get_logger(), "route step completed; next step index=%d", route_.step_index);
+  if (route_.step_index >= route_.step_count) {
+    route_complete_ = true;
+  }
 }
 
 const std::string &MissionBehaviorNode::tree_xml() const

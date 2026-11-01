@@ -12,8 +12,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace robot_chassis
 {
@@ -82,23 +84,65 @@ private:
   static double normalize_angle(double angle);
   static double planar_lateral_displacement(
     const nav_msgs::msg::Odometry &start, const nav_msgs::msg::Odometry &current);
+  static double planar_longitudinal_displacement(
+    const nav_msgs::msg::Odometry &start, const nav_msgs::msg::Odometry &current);
+  geometry_msgs::msg::Twist last_motion_command() const;
+  void clear_last_motion_command();
+
+  struct YawControlParameters
+  {
+    double kp;
+    double ki;
+    double integral_limit;
+    double max_rate;
+  };
+
+  struct MotionControlParameters
+  {
+    double max_acceleration_mps2;
+    double max_deceleration_mps2;
+    int ultrasonic_filter_window;
+  };
+
+  YawControlParameters yaw_control_parameters() const;
+  MotionControlParameters motion_control_parameters() const;
 
   double loop_hz_{20.0};
   double sensor_timeout_s_{0.3};
   double side_kp_{1.2};
   double yaw_kp_{1.0};
+  double yaw_ki_{0.05};
+  double yaw_integral_limit_rad_s_{0.5};
+  double max_acceleration_mps2_{0.8};
+  double max_deceleration_mps2_{0.8};
+  int ultrasonic_filter_window_{3};
+  double shift_wall_enable_tolerance_m_{0.10};
+  double shift_wall_cancel_side_distance_m_{0.25};
+  double shift_wall_cancel_side_tolerance_m_{0.02};
   double max_lateral_speed_mps_{0.15};
   double max_yaw_rate_rad_s_{0.4};
   double stop_speed_epsilon_mps_{0.03};
   double stop_angular_epsilon_rad_s_{0.08};
   double stop_settle_s_{0.2};
-  double default_front_slow_m_{0.8};
-  double default_front_stop_m_{0.35};
-  double default_safety_distance_m_{0.12};
+  double default_front_slow_m_{0.30};
+  double default_front_stop_m_{0.05};
+  double default_safety_distance_m_{0.05};
+  double reverse_distance_m_{0.70};
+  double reverse_distance_tolerance_m_{0.05};
+  double reverse_slow_distance_m_{0.25};
+  double shift_side_target_m_{0.05};
+  double shift_side_slow_distance_m_{0.20};
+  double shift_front_target_m_{0.05};
+  double shift_front_kp_{1.0};
+  double max_front_correction_mps_{0.08};
+  double mango_brake_time_s_{0.35};
 
   mutable std::mutex sensor_mutex_;
+  mutable std::mutex control_mutex_;
   Sensors sensors_;
   mutable std::mutex phase_mutex_;
+  mutable std::mutex command_mutex_;
+  geometry_msgs::msg::Twist last_command_;
   RoutePhase phase_{RoutePhase::Idle};
   int32_t active_row_id_{-1};
   int8_t active_direction_{1};
@@ -110,5 +154,6 @@ private:
   rclcpp_action::Server<FollowRow>::SharedPtr follow_server_;
   rclcpp_action::Server<ShiftLane>::SharedPtr shift_server_;
   rclcpp_action::Server<StopBase>::SharedPtr stop_server_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
 };
 }  // namespace robot_chassis

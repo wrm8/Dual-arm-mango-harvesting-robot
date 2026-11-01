@@ -13,6 +13,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(robot_arm_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
@@ -28,7 +29,7 @@ add_executable(row_navigation_node
 )
 target_include_directories(row_navigation_node PRIVATE include)
 ament_target_dependencies(row_navigation_node
-  geometry_msgs nav_msgs rclcpp rclcpp_action robot_arm_interfaces sensor_msgs)
+  geometry_msgs nav_msgs rclcpp rclcpp_action rcl_interfaces robot_arm_interfaces sensor_msgs)
 
 add_executable(mission_behavior_node
   src/mission_behavior_node.cpp

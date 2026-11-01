@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_vision</name>
+  <version>0.1.0</version>
+  <description>Mango segmentation, training tools and RealSense ROS 2 target publisher.</description>
+  <maintainer email="robot@example.invalid">wrm</maintainer>
+  <license>AGPL-3.0-only</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>robot_arm_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

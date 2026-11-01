@@ -5,19 +5,23 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 namespace robot_chassis
 {
 namespace
 {
+constexpr double kPi = 3.14159265358979323846;
+
 speed_t baud_to_termios(const int baud)
 {
   switch (baud)
@@ -43,6 +47,11 @@ double clamp(const double value, const double lower, const double upper)
 {
   return std::max(lower, std::min(value, upper));
 }
+
+double normalize_angle(const double angle)
+{
+  return std::atan2(std::sin(angle), std::cos(angle));
+}
 }  // namespace
 
 BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
@@ -53,6 +62,16 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   declare_parameter("allow_motion", false);
   declare_parameter("command_timeout_s", 0.2);
   declare_parameter("publish_rate_hz", 20.0);
+  declare_parameter("wheel_diameter_m", 0.075);
+  declare_parameter("wheel_base_m", 0.170);
+  declare_parameter("track_width_m", 0.186);
+  declare_parameter("encoder_counts_per_wheel_rev", 1560.0);
+  declare_parameter("max_wheel_speed_mps", 1.0);
+  declare_parameter("feedback_timeout_s", 0.3);
+  declare_parameter("wheel_sign_a", 1);
+  declare_parameter("wheel_sign_b", 1);
+  declare_parameter("wheel_sign_c", 1);
+  declare_parameter("wheel_sign_d", 1);
 
   serial_device_ = get_parameter("serial_device").as_string();
   baud_rate_ = static_cast<int>(get_parameter("baud_rate").as_int());
@@ -60,10 +79,30 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   allow_motion_ = get_parameter("allow_motion").as_bool();
   command_timeout_s_ = get_parameter("command_timeout_s").as_double();
   publish_rate_hz_ = get_parameter("publish_rate_hz").as_double();
+  wheel_diameter_m_ = get_parameter("wheel_diameter_m").as_double();
+  wheel_base_m_ = get_parameter("wheel_base_m").as_double();
+  track_width_m_ = get_parameter("track_width_m").as_double();
+  encoder_counts_per_wheel_rev_ = get_parameter("encoder_counts_per_wheel_rev").as_double();
+  max_wheel_speed_mps_ = get_parameter("max_wheel_speed_mps").as_double();
+  feedback_timeout_s_ = get_parameter("feedback_timeout_s").as_double();
+  wheel_sign_ = {
+    static_cast<double>(get_parameter("wheel_sign_a").as_int()),
+    static_cast<double>(get_parameter("wheel_sign_b").as_int()),
+    static_cast<double>(get_parameter("wheel_sign_c").as_int()),
+    static_cast<double>(get_parameter("wheel_sign_d").as_int())};
 
-  if (command_timeout_s_ <= 0.0 || publish_rate_hz_ <= 0.0)
+  if (command_timeout_s_ <= 0.0 || publish_rate_hz_ <= 0.0 || wheel_diameter_m_ <= 0.0 ||
+      wheel_base_m_ <= 0.0 || track_width_m_ <= 0.0 || encoder_counts_per_wheel_rev_ <= 0.0 ||
+      max_wheel_speed_mps_ <= 0.0 || feedback_timeout_s_ <= 0.0)
   {
-    throw std::invalid_argument("command_timeout_s and publish_rate_hz must be positive");
+    throw std::invalid_argument("invalid chassis serial or mecanum geometry parameter");
+  }
+  for (const auto sign : wheel_sign_)
+  {
+    if (sign != 1.0 && sign != -1.0)
+    {
+      throw std::invalid_argument("wheel_sign_a..d must be either 1 or -1");
+    }
   }
 
   command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -73,6 +112,8 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
     });
   state_pub_ = create_publisher<robot_arm_interfaces::msg::BaseState>(
     "/base/state", rclcpp::QoS(10));
+  wheel_state_pub_ = create_publisher<robot_arm_interfaces::msg::WheelState>(
+    "/base/wheel_state", rclcpp::SensorDataQoS());
   imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(
     "/base/imu", rclcpp::SensorDataQoS());
   odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(
@@ -96,7 +137,7 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
     [this]() { watchdog_callback(); });
 
   RCLCPP_INFO(
-    get_logger(), "base serial ready; motion=%s, protocol=CMD_VEL vx vy wz newline",
+    get_logger(), "base serial ready; motion=%s, protocol=CMD_WHEELS A B C D and FB feedback",
     allow_motion_ ? "enabled" : "disabled");
 }
 
@@ -169,16 +210,27 @@ void BaseSerialNode::command_callback(const geometry_msgs::msg::Twist::SharedPtr
   command.linear.y = clamp(command.linear.y, -1.0, 1.0);
   command.angular.z = clamp(command.angular.z, -2.0, 2.0);
 
+  const auto rotation_radius = 0.5 * (wheel_base_m_ + track_width_m_);
+  std::array<double, 4> wheel_speed_mps = {
+    command.linear.x + command.linear.y - rotation_radius * command.angular.z,
+    command.linear.x - command.linear.y - rotation_radius * command.angular.z,
+    command.linear.x + command.linear.y + rotation_radius * command.angular.z,
+    command.linear.x - command.linear.y + rotation_radius * command.angular.z};
+  for (auto &speed : wheel_speed_mps)
+  {
+    speed = clamp(speed, -max_wheel_speed_mps_, max_wheel_speed_mps_);
+  }
+
   {
     std::scoped_lock lock(state_mutex_);
     last_command_ = command;
     last_command_time_ = std::chrono::steady_clock::now();
     timeout_active_ = false;
   }
-  write_command(command);
+  write_wheel_command(wheel_speed_mps);
 }
 
-void BaseSerialNode::write_command(const geometry_msgs::msg::Twist &command)
+void BaseSerialNode::write_wheel_command(const std::array<double, 4> &wheel_speed_mps)
 {
   if (!allow_motion_ || dry_run_ || fd_ < 0)
   {
@@ -186,9 +238,12 @@ void BaseSerialNode::write_command(const geometry_msgs::msg::Twist &command)
   }
 
   std::ostringstream stream;
-  stream << std::fixed << std::setprecision(6)
-         << "CMD_VEL " << command.linear.x << ' ' << command.linear.y << ' '
-         << command.angular.z << '\n';
+  stream << "CMD_WHEELS";
+  for (const auto speed : wheel_speed_mps)
+  {
+    stream << ' ' << static_cast<long long>(std::llround(speed * 1000.0));
+  }
+  stream << "\r\n";
   const auto text = stream.str();
 
   std::scoped_lock lock(io_mutex_);
@@ -212,8 +267,7 @@ void BaseSerialNode::write_command(const geometry_msgs::msg::Twist &command)
 
 void BaseSerialNode::send_zero_once()
 {
-  geometry_msgs::msg::Twist zero;
-  write_command(zero);
+  write_wheel_command({0.0, 0.0, 0.0, 0.0});
 }
 
 void BaseSerialNode::watchdog_callback()
@@ -227,7 +281,7 @@ void BaseSerialNode::watchdog_callback()
     {
       timeout_active_ = true;
       last_command_ = geometry_msgs::msg::Twist();
-      RCLCPP_ERROR(get_logger(), "base command timeout: sending zero velocity");
+      RCLCPP_ERROR(get_logger(), "base command timeout: sending zero wheel speeds");
     }
   }
   if (timed_out)
@@ -240,8 +294,10 @@ void BaseSerialNode::watchdog_callback()
 void BaseSerialNode::publish_state()
 {
   robot_arm_interfaces::msg::BaseState state;
+  robot_arm_interfaces::msg::WheelState wheel_state;
   sensor_msgs::msg::Imu imu;
   nav_msgs::msg::Odometry odom;
+  bool publish_feedback = false;
   {
     std::scoped_lock lock(state_mutex_);
     state.header.stamp = now();
@@ -268,14 +324,22 @@ void BaseSerialNode::publish_state()
     odom.twist.twist.linear.x = vx_mps_;
     odom.twist.twist.linear.y = vy_mps_;
     odom.twist.twist.angular.z = wz_rad_s_;
+
+    wheel_state.header = state.header;
+    wheel_state.speed_mps = wheel_speed_mps_;
+    wheel_state.position_m = wheel_position_m_;
+    wheel_state.encoder_delta = wheel_encoder_delta_;
+    wheel_state.yaw_rad = yaw_rad_;
+    wheel_state.valid = have_feedback_;
+    publish_feedback = have_feedback_ &&
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - last_feedback_time_).count() <=
+      feedback_timeout_s_;
   }
   state_pub_->publish(state);
-  if (have_imu_)
+  if (publish_feedback)
   {
+    wheel_state_pub_->publish(wheel_state);
     imu_pub_->publish(imu);
-  }
-  if (have_odom_)
-  {
     odom_pub_->publish(odom);
   }
 }
@@ -315,6 +379,66 @@ void BaseSerialNode::parse_line(const std::string &line)
   std::istringstream stream(line);
   std::string tag;
   stream >> tag;
+  if (tag == "FB")
+  {
+    uint32_t sequence = 0;
+    double period_ms = 0.0;
+    std::array<int32_t, 4> raw_delta{};
+    double yaw_mdeg = 0.0;
+    if (!(stream >> sequence >> period_ms >> raw_delta[0] >> raw_delta[1] >> raw_delta[2] >>
+        raw_delta[3] >> yaw_mdeg) || !finite(period_ms) || !finite(yaw_mdeg) ||
+        period_ms <= 0.0 || period_ms > 2000.0)
+    {
+      return;
+    }
+
+    const auto period_s = period_ms / 1000.0;
+    const auto circumference_m = kPi * wheel_diameter_m_;
+    std::scoped_lock lock(state_mutex_);
+    for (std::size_t i = 0; i < raw_delta.size(); ++i)
+    {
+      const auto delta = wheel_sign_[i] > 0.0 ? raw_delta[i] : -raw_delta[i];
+      wheel_encoder_delta_[i] = delta;
+      const auto distance_m = static_cast<double>(delta) * circumference_m /
+        encoder_counts_per_wheel_rev_;
+      wheel_position_m_[i] += distance_m;
+      wheel_speed_mps_[i] = distance_m / period_s;
+    }
+
+    const auto yaw = yaw_mdeg * kPi / 180000.0;
+    if (have_previous_yaw_)
+    {
+      wz_rad_s_ = normalize_angle(yaw - previous_yaw_rad_) / period_s;
+    }
+    else
+    {
+      wz_rad_s_ = 0.0;
+      have_previous_yaw_ = true;
+    }
+    previous_yaw_rad_ = yaw;
+    yaw_rad_ = yaw;
+    gyro_z_rad_s_ = wz_rad_s_;
+
+    const auto &wheel = wheel_speed_mps_;
+    vx_mps_ = (wheel[0] + wheel[1] + wheel[2] + wheel[3]) * 0.25;
+    vy_mps_ = (wheel[0] - wheel[1] + wheel[2] - wheel[3]) * 0.25;
+    const auto rotation_radius = 0.5 * (wheel_base_m_ + track_width_m_);
+    const auto wheel_wz = (-wheel[0] - wheel[1] + wheel[2] + wheel[3]) /
+      (4.0 * rotation_radius);
+    if (!finite(wz_rad_s_))
+    {
+      wz_rad_s_ = wheel_wz;
+    }
+    x_m_ += (vx_mps_ * std::cos(yaw) - vy_mps_ * std::sin(yaw)) * period_s;
+    y_m_ += (vx_mps_ * std::sin(yaw) + vy_mps_ * std::cos(yaw)) * period_s;
+    last_feedback_time_ = std::chrono::steady_clock::now();
+    have_feedback_ = true;
+    have_odom_ = true;
+    have_imu_ = true;
+    (void)sequence;
+    return;
+  }
+
   if (tag == "IMU")
   {
     double yaw = 0.0;

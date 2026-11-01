@@ -54,3 +54,13 @@ ODOM x y yaw vx vy wz\n
 ```
 
 这只是占位协议。实际 V3/STM32 帧格式确定后，只替换 `base_serial_node` 的编码和解析，不改变行为树或跑垄 Action 接口。
+ ## 运行命令
+ ros2 run robot_chassis row_navigation_node   --ros-args   --params-file install/robot_chassis/share/robot_chassis/config/chassis.yaml
+
+ros2 run robot_sensors ultrasonic_node   --ros-args   --params-file install/robot_sensors/share/robot_sensors/config/ultrasonic.yaml
+
+ros2 run robot_chassis base_serial_node \
+  --ros-args \
+  --params-file install/robot_chassis/share/robot_chassis/config/chassis.yaml
+
+ros2 run rqt_reconfigure rqt_reconfigure

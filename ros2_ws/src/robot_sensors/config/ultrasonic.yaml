@@ -10,10 +10,10 @@ ultrasonic_node:
     serial_min_range_m: 0.03
     serial_max_range_m: 5.0
     field_of_view_rad: 1.22  # 70 degrees; adjust to the configured A21 angle level
-    front_serial_device: /dev/ttyCH9344USB0
-    rear_serial_device: /dev/ttyCH9344USB1
-    left_serial_device: /dev/ttyCH9344USB2
-    right_serial_device: /dev/ttyCH9344USB3
+    front_serial_device: /dev/ultra0
+    rear_serial_device: /dev/ultra1
+    left_serial_device: /dev/ultra2
+    right_serial_device: /dev/ultra3
     front_frame_id: ultrasonic_front_link
     rear_frame_id: ultrasonic_rear_link
     left_frame_id: ultrasonic_left_link

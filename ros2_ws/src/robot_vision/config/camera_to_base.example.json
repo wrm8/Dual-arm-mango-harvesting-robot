@@ -1,0 +1,7 @@
+{
+  "calibrated": false,
+  "source_frame": "camera_color_optical_frame",
+  "target_frame": "base_link",
+  "camera_to_robot": [[0,0,1,0],[-1,0,0,0],[0,-1,0,0],[0,0,0,1]],
+  "note": "Example axes only. Measure rotation and translation for the actual camera before setting calibrated=true."
+}

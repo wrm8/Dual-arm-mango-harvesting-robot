@@ -1,0 +1,19 @@
+mango_vision_node:
+  ros__parameters:
+    weights: ""
+    decision_config: ""
+    source: realsense
+    device: "0"
+    imgsz: 640
+    width: 640
+    height: 480
+    fps: 30
+    process_hz: 5.0
+    serial: ""
+    rotate: cw
+    # Enable target publication after measuring the camera-to-base transform.
+    publish_targets: false
+    calibration: ""
+    target_frame: base_link
+    min_target_confidence: 0.75
+    track_match_distance_m: 0.08

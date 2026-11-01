@@ -1,0 +1,8 @@
+# Resolved relative to project root by train.py.
+path: datasets/mango
+train: images/train
+val: images/val
+names:
+  0: green_mango
+  1: tree_trunk
+  2: yellow_mango
