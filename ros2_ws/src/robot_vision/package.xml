@@ -7,6 +7,7 @@
   <license>AGPL-3.0-only</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>robot_arm_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>

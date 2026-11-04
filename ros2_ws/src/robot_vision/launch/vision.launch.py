@@ -12,11 +12,11 @@ def generate_launch_description():
     defaults = {'params_file': os.path.join(share, 'config', 'vision.yaml'),
                 'weights': os.path.join(share, 'models', 'best.pt'),
                 'source': 'realsense', 'device': '0',
-                'publish_targets': 'false', 'calibration': ''}
+                'publish_targets': 'false', 'calibration': '', 'decision_config': ''}
     arguments = [DeclareLaunchArgument(key, default_value=value)
                  for key, value in defaults.items()]
     overrides = {key: ParameterValue(LaunchConfiguration(key), value_type=str)
-                 for key in ('weights', 'source', 'device', 'calibration')}
+                 for key in ('weights', 'source', 'device', 'calibration', 'decision_config')}
     overrides['publish_targets'] = ParameterValue(
         LaunchConfiguration('publish_targets'), value_type=bool)
     return LaunchDescription(arguments + [Node(

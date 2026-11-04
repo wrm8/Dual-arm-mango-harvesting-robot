@@ -192,12 +192,16 @@ private:
       }
       FollowRow::Goal goal;
       goal.row_id = route.row_index;
+      goal.stage_id = route.step_index == 15 ? 0 :
+        static_cast<uint8_t>(route.step_index + 1);
       goal.direction = route.direction;
-      goal.max_speed_mps = route.row_speed_mps;
+      //goal.max_speed_mps = route.row_speed_mps;
+      goal.max_speed_mps = route.direction < 0 ? route.reverse_speed_mps : route.row_speed_mps;
       goal.side_target_m = route.side_target_m;
       goal.front_slow_distance_m = route.front_slow_distance_m;
       goal.front_stop_distance_m = route.front_stop_distance_m;
       goal.use_side_centering = route.use_side_centering;
+      goal.side_sensor = route.side_sensor;
       goal.reverse_stop_on_zero_velocity = route.reverse_stop_on_zero_velocity;
       auto options = FollowClient::SendGoalOptions();
       options.goal_response_callback = [this](FollowGoalHandle::SharedPtr handle) {
@@ -231,7 +235,11 @@ private:
         goal_pending_ = false;
         send_in_flight_ = false;
         result_ready_ = true;
-        result_success_ = succeeded(result.code);
+        result_success_ = succeeded(result.code) && result.result && result.result->success;
+        if (!result_success_) {
+          RCLCPP_ERROR(node_->get_logger(), "FollowRow failed: %s",
+            result.result ? result.result->message.c_str() : "missing action result");
+        }
         follow_goal_handle_.reset();
       };
       send_in_flight_ = true;
@@ -243,6 +251,7 @@ private:
       return false;
     }
     ShiftLane::Goal goal;
+    goal.stage_id = static_cast<uint8_t>(route.step_index + 1);
     goal.direction = route.shift_direction;
     goal.distance_m = route.shift_distance_m;
     goal.max_speed_mps = route.shift_speed_mps;
@@ -256,6 +265,7 @@ private:
       route.shift_wall_control_cancel_side_distance_m;
     goal.wall_control_cancel_side_tolerance_m =
       route.shift_wall_control_cancel_side_tolerance_m;
+    goal.vision_stop_enabled = route.shift_vision_stop_enabled;
     auto options = ShiftClient::SendGoalOptions();
     options.goal_response_callback = [this](ShiftGoalHandle::SharedPtr handle) {
       std::scoped_lock lock(mutex_);
@@ -286,7 +296,11 @@ private:
       goal_pending_ = false;
       send_in_flight_ = false;
       result_ready_ = true;
-      result_success_ = succeeded(result.code);
+      result_success_ = succeeded(result.code) && result.result && result.result->success;
+      if (!result_success_) {
+        RCLCPP_ERROR(node_->get_logger(), "ShiftLane failed: %s",
+          result.result ? result.result->message.c_str() : "missing action result");
+      }
       shift_goal_handle_.reset();
     };
     send_in_flight_ = true;
@@ -529,10 +543,12 @@ private:
 MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
 {
   declare_parameter("row_count", 7);
-  declare_parameter("step_count", 15);
+  declare_parameter("step_count", 16);
   declare_parameter("row_speed_mps", 0.20);
   declare_parameter("shift_distance_m", 0.30);
   declare_parameter("shift_speed_mps", 0.10);
+  declare_parameter("shift_first_lateral_speed_mps", 0.0);
+  declare_parameter("shift_route_step_15_speed_mps", 0.0);
   declare_parameter("row_side_target_m", 0.05);
   declare_parameter("front_slow_distance_m", 0.30);
   declare_parameter("front_stop_distance_m", 0.05);
@@ -542,16 +558,24 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
   declare_parameter("hold_front_distance", true);
   declare_parameter("shift_front_target_m", 0.05);
   declare_parameter("shift_side_slow_distance_m", 0.20);
+  declare_parameter("reverse_speed_mps", 0.50);
   declare_parameter("shift_wall_target_m", 0.05);
   declare_parameter("shift_wall_enable_tolerance_m", 0.10);
   declare_parameter("shift_disable_wall_control_on_side_distance", false);
   declare_parameter("shift_wall_control_cancel_side_distance_m", 0.25);
   declare_parameter("shift_wall_control_cancel_side_tolerance_m", 0.02);
   declare_parameter("reverse_stop_on_zero_velocity", false);
-  for (int step = 1; step <= 7; ++step) {
+  // The current test holds at the tree and publishes candidates without picking.
+  declare_parameter("legacy_mango_interrupt_enabled", false);
+  for (int step = 1; step <= 8; ++step) {
     declare_parameter("shift_wall_sensor_step_" + std::to_string(step), 1);
     declare_parameter("shift_wall_cancel_step_" + std::to_string(step), false);
+    declare_parameter("shift_vision_stop_step_" + std::to_string(step), step != 1 && step != 8);
+  }
+  for (int step = 1; step <= 7; ++step) {
     declare_parameter("reverse_stop_zero_step_" + std::to_string(step), false);
+    const int sensor_default = step == 7 ? 0 : (step % 2 == 1 ? 2 : 1);
+    declare_parameter("reverse_side_sensor_step_" + std::to_string(step), sensor_default);
   }
   declare_parameter("mango_min_confidence", 0.75);
   declare_parameter("mango_stable_frames", 3);
@@ -580,6 +604,7 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
   route_.front_slow_distance_m = get_parameter("front_slow_distance_m").as_double();
   route_.front_stop_distance_m = get_parameter("front_stop_distance_m").as_double();
   route_.shift_safety_distance_m = get_parameter("shift_safety_distance_m").as_double();
+  route_.reverse_speed_mps = get_parameter("reverse_speed_mps").as_double();
   route_.reverse_distance_m = get_parameter("reverse_distance_m").as_double();
   route_.shift_by_side_wall = get_parameter("shift_by_side_wall").as_bool();
   route_.hold_front_distance = get_parameter("hold_front_distance").as_bool();
@@ -603,9 +628,14 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
   mango_max_distance_m_ = get_parameter("mango_max_distance_m").as_double();
   mango_center_tolerance_m_ = get_parameter("mango_center_tolerance_m").as_double();
 
-  if (route_.step_count != 15 || route_.direction != 1 ||
+  const auto first_lateral_speed = get_parameter("shift_first_lateral_speed_mps").as_double();
+  const auto route_step_15_speed = get_parameter("shift_route_step_15_speed_mps").as_double();
+  if (route_.step_count != 16 || route_.direction != 1 ||
       route_.row_speed_mps <= 0.0 || route_.shift_distance_m <= 0.0 ||
-      route_.shift_speed_mps <= 0.0 || route_.front_slow_distance_m <= route_.front_stop_distance_m ||
+      route_.shift_speed_mps <= 0.0 || route_.shift_speed_mps > 2.0 ||
+      first_lateral_speed < 0.0 || first_lateral_speed > 2.0 ||
+      route_step_15_speed < 0.0 || route_step_15_speed > 2.0 ||
+      route_.front_slow_distance_m <= route_.front_stop_distance_m ||
       route_.reverse_distance_m <= 0.0 || mango_stable_frames_ <= 0 ||
       mango_min_distance_m_ <= 0.0 || mango_max_distance_m_ <= mango_min_distance_m_) {
     throw std::invalid_argument("invalid mission behavior parameters");
@@ -647,7 +677,7 @@ MissionBehaviorNode::MissionBehaviorNode() : Node("mission_behavior_node")
     std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::duration<double>(1.0 / tick_hz)),
     [this]() { tick_tree(); });
-  RCLCPP_INFO(get_logger(), "BehaviorTree mission ready: explicit 15-step route with restartable mango interruption");
+  RCLCPP_INFO(get_logger(), "BehaviorTree mission ready: explicit 16-step route with restartable mango interruption");
 }
 
 void MissionBehaviorNode::mango_callback(
@@ -784,8 +814,10 @@ MissionBehaviorNode::RouteParameters MissionBehaviorNode::route_parameters() con
   auto route = route_;
   route.step_index = route_.step_index;
   route.direction = route_.step_index == 0 ? 1 : -1;
-  route.mango_interruptible = route_.step_index != 1 && route_.step_index != 13;
+  route.mango_interruptible = route_.step_index != 1 && route_.step_index != 14;
   route.use_side_centering = true;
+  route.side_sensor = 0;
+  route.shift_speed_mps = get_parameter("shift_speed_mps").as_double();
 
   // Read these parameters for every new action so rqt/ros2 param changes
   // take effect on the next route segment.
@@ -798,15 +830,36 @@ MissionBehaviorNode::RouteParameters MissionBehaviorNode::route_parameters() con
     get_parameter("shift_wall_control_cancel_side_distance_m").as_double();
   route.shift_wall_control_cancel_side_tolerance_m =
     get_parameter("shift_wall_control_cancel_side_tolerance_m").as_double();
+  route.reverse_speed_mps =
+    get_parameter("reverse_speed_mps").as_double();
+  // route.reverse_distance_kp =
+  //   get_parameter("reverse_distance_kp").as_double();
   route.reverse_stop_on_zero_velocity =
     get_parameter("reverse_stop_on_zero_velocity").as_bool();
 
-  if (route_.step_index % 2 == 1) {
-    const auto shift_index = static_cast<std::size_t>((route_.step_index - 1) / 2);
+  if ((route_.step_index <= 13 && route_.step_index % 2 == 1) ||
+      route_.step_index == 14)
+  {
+    const auto shift_index = route_.step_index == 14 ? 7U :
+      static_cast<std::size_t>((route_.step_index - 1) / 2);
     route.shift_direction =
       (route_.step_index == 14 || route_.step_index % 4 == 3) ? 1 : -1;
 
     const auto step_number = shift_index + 1;
+    route.shift_vision_stop_enabled =
+      get_parameter("shift_vision_stop_step_" + std::to_string(step_number)).as_bool();
+    if (step_number == 1) {
+      const auto speed = get_parameter("shift_first_lateral_speed_mps").as_double();
+      if (speed > 0.0) {
+        route.shift_speed_mps = speed;
+      }
+    }
+    if (route_.step_index == 14) {
+      const auto speed = get_parameter("shift_route_step_15_speed_mps").as_double();
+      if (speed > 0.0) {
+        route.shift_speed_mps = speed;
+      }
+    }
     const auto sensor_value =
       get_parameter("shift_wall_sensor_step_" + std::to_string(step_number)).as_int();
     route.shift_wall_sensor =
@@ -818,6 +871,12 @@ MissionBehaviorNode::RouteParameters MissionBehaviorNode::route_parameters() con
     const auto step_number = reverse_index + 1;
     route.reverse_stop_on_zero_velocity =
       get_parameter("reverse_stop_zero_step_" + std::to_string(step_number)).as_bool();
+    const auto configured_sensor = get_parameter(
+      "reverse_side_sensor_step_" + std::to_string(step_number)).as_int();
+    const auto sensor_value = configured_sensor < 0 ? 0 :
+      (configured_sensor > 2 ? 2 : configured_sensor);
+    route.use_side_centering = sensor_value != 0;
+    route.side_sensor = sensor_value == 2 ? 1 : 0;
   }
 
   return route;
@@ -832,15 +891,16 @@ bool MissionBehaviorNode::route_complete() const
 bool MissionBehaviorNode::next_action_is_shift() const
 {
   std::scoped_lock lock(mutex_);
-  // The 15-step route is: forward, then seven alternating shifts/reverses,
-  // ending with the final 70 cm reverse.
-  return route_.step_index % 2 == 1;
+  // Steps 2..14 alternate shifts and reverses; step 15 shifts left and step 16 reverses.
+  return (route_.step_index <= 13 && route_.step_index % 2 == 1) ||
+         route_.step_index == 14;
 }
 
 bool MissionBehaviorNode::current_step_mango_interruptible() const
 {
   std::scoped_lock lock(mutex_);
-  return route_.step_index != 1 && route_.step_index != 13;
+  return get_parameter("legacy_mango_interrupt_enabled").as_bool() &&
+    route_.step_index != 1 && route_.step_index != 14;
 }
 
 void MissionBehaviorNode::follow_completed()

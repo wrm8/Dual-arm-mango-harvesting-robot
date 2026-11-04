@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class HeightRuleTests(unittest.TestCase):
     def setUp(self):
         self.cfg = json.loads((ROOT / 'configs/vision.json').read_text())
+        self.cfg['target_policy'] = 'small_only'
+        self.cfg['tie_relative_tolerance'] = 0.0
         self.fruits = [
             Fruit(0, 'green_mango', 150, 100, 100),
             Fruit(1, 'yellow_mango', 240, 300, 70),
@@ -49,14 +51,14 @@ class HeightRuleTests(unittest.TestCase):
         self.assertEqual(result['small_ids'], [])
         self.assertEqual(result['targets'], [])
 
-    def test_both_different_never_returns_two(self):
+    def test_both_different_selects_each_side(self):
         self.fruits[3].height_px = 60
         result = self.decide()
-        self.assertEqual(result['reason'], 'multiple_small_candidates')
-        self.assertEqual(result['status'], 'uncertain')
-        self.assertEqual(result['small_ids'], [])
-        self.assertEqual(result['small_by_side'], {})
-        self.assertEqual(result['targets'], [])
+        self.assertEqual(result['reason'], 'per_side_small_fruits')
+        self.assertEqual(result['status'], 'confirmed')
+        self.assertEqual(result['small_ids'], [1, 3])
+        self.assertEqual(result['small_by_side'], {'left': 1, 'right': 3})
+        self.assertEqual({t['id'] for t in result['targets']}, {1, 3})
         self.assertEqual(set(result['ratios']), {'left', 'right'})
 
     def test_small_difference_still_selects_shorter_by_default(self):
@@ -110,7 +112,7 @@ class HeightRuleTests(unittest.TestCase):
         for _ in range(self.cfg['stable_frames']):
             stable = gate.update(self.decide(), self.fruits)
         self.assertTrue(stable)
-        self.fruits[3].height_px = 80
+        self.fruits.pop()
         self.assertFalse(gate.update(self.decide(), self.fruits))
         self.assertEqual(gate.count, 0)
 

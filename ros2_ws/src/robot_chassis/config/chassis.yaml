@@ -1,117 +1,161 @@
 base_serial_node:
   ros__parameters:
-    # Keep both false until the STM32 protocol, port, and safety checks are verified.
+    # STM32 底盘控制器的串口设备路径。
     serial_device: /dev/stm32_chassis
+    # 串口波特率，必须与 STM32 端一致。
     baud_rate: 115200
+    # 仿真调试模式；true 时不实际发送运动命令。
     dry_run: false
+    # 是否允许底盘执行运动命令。
     allow_motion: true
+    # 是否启用段号及到位反馈协议，须与 STM32 端实现一致。
+    stage_protocol_enabled: true
+    # 上位机命令超时时间，单位秒。
     command_timeout_s: 0.20
+    # 底盘状态发布频率，单位 Hz。
     publish_rate_hz: 20.0
-    # Wheel order: A left-rear, B left-front, C right-front, D right-rear.
-    # The STM32 command values are signed mm/s integers.
-    wheel_diameter_m: 0.075
-    wheel_base_m: 0.170
-    track_width_m: 0.186
-    encoder_counts_per_wheel_rev: 1560.0
-    max_wheel_speed_mps: 1.0
-    feedback_timeout_s: 0.30
-    wheel_sign_a: 1
-    wheel_sign_b: 1
-    wheel_sign_c: 1
-    wheel_sign_d: 1
+    # 车轮顺序：A 左后、B 左前、C 右前、D 右后；STM32 速度命令为带符号的 mm/s 整数。
+    wheel_diameter_m: 0.075  # 驱动轮直径，单位米。
+    wheel_base_m: 0.220  # 前后轴距，单位米。
+    track_width_m: 0.240  # 左右轮距，单位米。
+    encoder_counts_per_wheel_rev: 1560.0  # 车轮转一圈对应的编码器计数。
+    max_wheel_speed_mps: 1.0  # 单轮最大允许线速度，单位米/秒。
+    feedback_timeout_s: 0.30  # 下位机反馈超时时间，单位秒。
+    wheel_sign_a: 1  # A 轮编码器方向修正系数，通常为 1 或 -1。
+    wheel_sign_b: 1  # B 轮编码器方向修正系数，通常为 1 或 -1。
+    wheel_sign_c: 1  # C 轮编码器方向修正系数，通常为 1 或 -1。
+    wheel_sign_d: 1  # D 轮编码器方向修正系数，通常为 1 或 -1。
 
 row_navigation_node:
   ros__parameters:
-    loop_hz: 20.0
-    sensor_timeout_s: 0.30
-    side_kp: 1.2
-    yaw_kp: 1.0
-    yaw_ki: 0.05
-    yaw_integral_limit: 0.5
-    max_acceleration_mps2: 0.8
-    max_deceleration_mps2: 0.8
-    ultrasonic_filter_window: 3
-    shift_wall_enable_tolerance_m: 0.10
-    shift_wall_cancel_side_distance_m: 0.25
-    shift_wall_cancel_side_tolerance_m: 0.02
-    max_lateral_speed_mps: 0.15
-    max_yaw_rate_rad_s: 0.40
-    stop_speed_epsilon_mps: 0.03
-    stop_angular_epsilon_rad_s: 0.08
-    stop_settle_s: 0.20
-    default_front_slow_m: 0.30
-    default_front_stop_m: 0.05
-    default_safety_distance_m: 0.05
-    reverse_distance_m: 0.75
-    reverse_distance_tolerance_m: 0.05
-    reverse_slow_distance_m: 0.25
-    shift_side_target_m: 0.05
-    shift_side_slow_distance_m: 0.50
-    shift_front_target_m: 0.05
-    shift_front_kp: 1.0
-    max_front_correction_mps: 0.08
-    mango_brake_time_s: 0.35
-
+    # 合格芒果直接触发低速；树干按旋转后画面的水平误差做 PI 居中。
+    vision_tree_kp: 0.2  # 输入为画面宽度归一化误差，输出为横移 m/s。
+    vision_tree_ki: 0.02  # 图像误差积分增益。
+    vision_tree_integral_limit: 0.20  # 归一化误差积分限幅。
+    vision_tree_max_speed_mps: 0.12  # 找树干速度及居中速度上限，单位 m/s。
+    vision_tree_center_tolerance_ratio: 0.02  # ±画面宽度的 2%；640 像素宽时为 ±12.8 像素。
+    vision_stop_settle_s: 0.30
+    vision_observation_timeout_s: 0.60
+    vision_tree_search_distance_m: 0.35
+    vision_tree_alignment_timeout_s: 15.0
+    vision_tree_control_sign: -1.0  # 实测调整：1=画面右偏发正 Y，-1=画面右偏发负 Y。
+    loop_hz: 20.0  # 导航控制循环频率，单位 Hz。
+    sensor_timeout_s: 0.30  # 传感器数据超时时间，单位秒。
+    side_kp: 1.2  # 侧向距离误差的比例增益。
+    yaw_kp: 4.0  # 航向角误差的比例增益。
+    yaw_ki: 0.0  # 航向角误差的积分增益。
+    yaw_integral_limit: 2.0  # 航向积分项限幅。
+    max_acceleration_mps2: 0.8  # 最大加速度，单位米/秒²。
+    max_deceleration_mps2: 0.8  # 最大减速度，单位米/秒²。
+    ultrasonic_filter_window: 3  # 超声波距离滤波窗口长度。
+    shift_wall_enable_tolerance_m: 0.05  # 横移时启用墙面控制的距离容差，单位米。
+    shift_wall_cancel_side_distance_m: 0.25  # 侧距达到此值时可取消墙面控制，单位米。
+    shift_wall_cancel_side_tolerance_m: 0.02  # 取消墙面控制时的侧距误差容差，单位米。
+    max_lateral_speed_mps: 1.0  # 最大横向速度，单位米/秒。
+    max_yaw_rate_rad_s: 1.0  # 最大角速度，单位弧度/秒。
+    stop_speed_epsilon_mps: 0.03  # 判定线速度停止的阈值，单位米/秒。
+    stop_angular_epsilon_rad_s: 0.08  # 判定角速度停止的阈值，单位弧度/秒。
+    stop_settle_s: 0.20  # 速度满足停止阈值后需稳定的时间，单位秒。
+    # 光电到位时跳过速度斜坡，然后等待新的零速里程计反馈。
+    photoelectric_stop_timeout_s: 3.0  # 等待停车确认的最长时间，单位秒。
+    default_front_slow_m: 0.30  # 前方进入减速的默认距离，单位米。
+    default_front_stop_m: 0.05  # 前方停车的默认距离，单位米。
+    default_safety_distance_m: 0.05  # 默认安全距离，单位米。
+    reverse_speed_mps: 0.50  # 后退速度，单位米/秒。
+    reverse_distance_kp: 2.0  # 后退距离误差比例增益，单位 1/s。
+    reverse_distance_m: 0.7  # 默认后退目标距离，单位米。
+    reverse_distance_tolerance_m: 0.01  # 后退到位距离容差，单位米。
+    reverse_slow_distance_m: 0.20  # 后退剩余距离小于此值时开始减速，单位米。
+    shift_side_target_m: 0.05  # 横移侧向目标距离，单位米。
+    shift_side_slow_distance_m: 0.50  # 横移接近侧向目标时的减速距离，单位米。
+    shift_front_target_m: 0.04  # 横移前方目标距离，单位米。
+    shift_front_kp: 1.0  # 前方距离误差修正的比例增益。
+    max_front_correction_mps: 0.08  # 前向修正速度最大值，单位米/秒。
+    mango_brake_time_s: 0.35  # 芒果触发停车后的制动等待时间，单位秒。
 
 mission_behavior_node:
   ros__parameters:
-    row_count: 7
-    step_count: 15
-    row_speed_mps: 0.20
-    shift_distance_m: 0.30
-    shift_speed_mps: 0.10
-    row_side_target_m: 0.05
-    front_slow_distance_m: 0.30
-    front_stop_distance_m: 0.05
-    shift_safety_distance_m: 0.05
-    reverse_distance_m: 0.70
-    shift_by_side_wall: true
-    hold_front_distance: true
-    shift_front_target_m: 0.05
-    shift_side_slow_distance_m: 0.50
-    shift_wall_target_m: 0.05
-    shift_wall_enable_tolerance_m: 0.10
-    shift_disable_wall_control_on_side_distance: false
-    shift_wall_control_cancel_side_distance_m: 0.25
-    shift_wall_control_cancel_side_tolerance_m: 0.02
-    reverse_stop_on_zero_velocity: true
-    # Shift steps 1..7 correspond to route indices 1,3,5,7,9,11,13.
-    # 0=none, 1=front, 2=rear. These scalar params are editable in rqt.
-    shift_wall_sensor_step_1: 1
-    shift_wall_sensor_step_2: 1
-    shift_wall_sensor_step_3: 1
-    shift_wall_sensor_step_4: 1
-    shift_wall_sensor_step_5: 1
-    shift_wall_sensor_step_6: 1
-    shift_wall_sensor_step_7: 1
-    shift_wall_cancel_step_1: false
-    shift_wall_cancel_step_2: false
-    shift_wall_cancel_step_3: false
-    shift_wall_cancel_step_4: false
-    shift_wall_cancel_step_5: false
-    shift_wall_cancel_step_6: false
-    shift_wall_cancel_step_7: false
-    # Reverse steps 1..7 correspond to route indices 2,4,6,8,10,12,14.
-    reverse_stop_zero_step_1: true
-    reverse_stop_zero_step_2: true
-    reverse_stop_zero_step_3: true
-    reverse_stop_zero_step_4: true
-    reverse_stop_zero_step_5: true
-    reverse_stop_zero_step_6: true
-    reverse_stop_zero_step_7: true
-    mango_min_confidence: 0.75
-    mango_stable_frames: 3
-    mango_timeout_s: 0.50
-    mango_rearm_delay_s: 1.0
-    mango_min_distance_m: 0.30
-    mango_max_distance_m: 1.50
-    mango_center_tolerance_m: 0.10
-    mango_approach_height_m: 0.10
-    mango_grasp_offset_x_m: 0.0
-    mango_grasp_offset_y_m: 0.0
-    mango_grasp_offset_z_m: 0.0
-    mango_tool_tilt_rad: 1.5
-    mango_joint5_rad: 0.0
-    pick_duration_s: 2.0
-    pick_return_home: true
-    tick_hz: 20.0
+    legacy_mango_interrupt_enabled: false
+    # Shift ordinal 1..8 maps to route steps 2,4,6,8,10,12,14,15.
+    # Visual stopping is disabled at route steps 2 and 15.
+    shift_vision_stop_step_1: false
+    shift_vision_stop_step_2: true
+    shift_vision_stop_step_3: true
+    shift_vision_stop_step_4: true
+    shift_vision_stop_step_5: true
+    shift_vision_stop_step_6: true
+    shift_vision_stop_step_7: true
+    shift_vision_stop_step_8: false
+    row_count: 7  # 任务路线的垄数。
+    step_count: 16  # 整条路线的动作步骤数。
+    row_speed_mps: 0.80  # 沿垄行驶速度，单位米/秒。
+    shift_distance_m: 0.30  # 每次横移距离，单位米。
+    shift_speed_mps: 0.60  # 横移速度，单位米/秒。
+    shift_first_lateral_speed_mps: 0.0  # Route step 2; 0 uses shift_speed_mps.
+    shift_route_step_15_speed_mps: 0.0  # Route step 15; 0 uses shift_speed_mps.
+    row_side_target_m: 0.05  # 沿垄行驶时的侧向目标距离，单位米。
+    front_slow_distance_m: 0.50  # 前方减速距离，单位米。
+    front_stop_distance_m: 0.05  # 前方停车距离，单位米。
+    shift_safety_distance_m: 0.04  # 横移时要求保持的安全距离，单位米。
+    reverse_speed_mps: 0.50  # 后退速度，单位米/秒。
+    reverse_distance_kp: 2.0  # 后退距离误差比例增益，单位 1/s。
+    reverse_distance_m: 0.70  # 任务路线后退距离，单位米。
+    shift_by_side_wall: true  # 是否使用侧向墙面/测距辅助横移。
+    hold_front_distance: true  # 横移时是否保持前方目标距离。
+    shift_front_target_m: 0.04  # 横移时前方目标距离，单位米。
+    shift_side_slow_distance_m: 0.50  # 横移接近侧向目标时的减速距离，单位米。
+    shift_wall_target_m: 0.05  # 横移时侧向墙面目标距离，单位米。
+    shift_wall_enable_tolerance_m: 0.05  # 启用墙面控制的距离容差，单位米。
+    shift_disable_wall_control_on_side_distance: false  # 是否按侧距条件关闭墙面控制。
+    shift_wall_control_cancel_side_distance_m: 0.25  # 取消墙面控制的侧距目标，单位米。
+    shift_wall_control_cancel_side_tolerance_m: 0.02  # 取消墙面控制时的侧距容差，单位米。
+    reverse_stop_on_zero_velocity: true  # 后退时是否在速度反馈为零时结束动作。
+    # 横移步骤 1 到 7 对应路线索引 1、3、5、7、9、11、13；0=不使用，1=前侧，2=后侧。
+    shift_wall_sensor_step_1: 1  # 第 1 次横移使用的墙面传感器。
+    shift_wall_sensor_step_2: 1  # 第 2 次横移使用的墙面传感器。
+    shift_wall_sensor_step_3: 1  # 第 3 次横移使用的墙面传感器。
+    shift_wall_sensor_step_4: 2  # 第 4 次横移使用的墙面传感器。
+    shift_wall_sensor_step_5: 1  # 第 5 次横移使用的墙面传感器。
+    shift_wall_sensor_step_6: 1  # 第 6 次横移使用的墙面传感器。
+    shift_wall_sensor_step_7: 1  # 第 7 次横移使用的墙面传感器。
+    shift_wall_sensor_step_8: 1  # 第 8 次横移使用的墙面传感器。
+    shift_wall_cancel_step_1: false  # 第 1 次横移是否取消墙面控制。
+    shift_wall_cancel_step_2: false  # 第 2 次横移是否取消墙面控制。
+    shift_wall_cancel_step_3: false  # 第 3 次横移是否取消墙面控制。
+    shift_wall_cancel_step_4: false  # 第 4 次横移是否取消墙面控制。
+    shift_wall_cancel_step_5: false  # 第 5 次横移是否取消墙面控制。
+    shift_wall_cancel_step_6: false  # 第 6 次横移是否取消墙面控制。
+    shift_wall_cancel_step_7: false  # 第 7 次横移是否取消墙面控制。
+    shift_wall_cancel_step_8: false  # 第 8 次横移是否取消墙面控制。
+    # 后退步骤 1 到 7 对应路线索引 2、4、6、8、10、12、14。
+    reverse_stop_zero_step_1: true  # 第 1 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_2: true  # 第 2 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_3: true  # 第 3 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_4: true  # 第 4 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_5: true  # 第 5 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_6: true  # 第 6 个后退步骤是否在零速时结束。
+    reverse_stop_zero_step_7: true  # 第 7 个后退步骤是否在零速时结束。
+    # Reverse ordinals 1..7 map to route steps 3,5,7,9,11,13,16. 0=off, 1=left, 2=right.
+    reverse_side_sensor_step_1: 2  # Route step 3 uses the right ultrasonic sensor.
+    reverse_side_sensor_step_2: 1  # Route step 5 uses the left ultrasonic sensor.
+    reverse_side_sensor_step_3: 2  # Route step 7 uses the right ultrasonic sensor.
+    reverse_side_sensor_step_4: 1  # Route step 9 uses the left ultrasonic sensor.
+    reverse_side_sensor_step_5: 2  # Route step 11 uses the right ultrasonic sensor.
+    reverse_side_sensor_step_6: 1  # Route step 13 uses the left ultrasonic sensor.
+    reverse_side_sensor_step_7: 0  # Route step 16 keeps encoder-only distance stopping.
+    mango_min_confidence: 0.75  # 接受芒果视觉检测结果的最低置信度。
+    mango_stable_frames: 3  # 判定视觉检测稳定所需的连续帧数。
+    mango_timeout_s: 0.50  # 视觉目标数据超时时间，单位秒。
+    mango_rearm_delay_s: 1.0  # 芒果处理完成后重新允许触发的等待时间，单位秒。
+    mango_min_distance_m: 0.30  # 允许处理的芒果最小距离，单位米。
+    mango_max_distance_m: 1.50  # 允许处理的芒果最大距离，单位米。
+    mango_center_tolerance_m: 0.10  # 芒果目标中心允许偏差，单位米。
+    mango_approach_height_m: 0.10  # 机械臂接近芒果时使用的高度，单位米。
+    mango_grasp_offset_x_m: 0.0  # 抓取目标 X 方向偏移，单位米。
+    mango_grasp_offset_y_m: 0.0  # 抓取目标 Y 方向偏移，单位米。
+    mango_grasp_offset_z_m: 0.0  # 抓取目标 Z 方向偏移，单位米。
+    mango_tool_tilt_rad: 1.5  # 工具/末端倾角，单位弧度。
+    mango_joint5_rad: 0.0  # 抓取时第 5 关节目标角度，单位弧度。
+    pick_duration_s: 2.0  # 抓取动作执行时长，单位秒。
+    pick_return_home: true  # 抓取完成后是否返回初始姿态。
+    tick_hz: 20.0  # 行为树任务调度频率，单位 Hz。

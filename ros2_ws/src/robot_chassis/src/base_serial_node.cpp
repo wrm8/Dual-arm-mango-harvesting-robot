@@ -60,6 +60,7 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   declare_parameter("baud_rate", 115200);
   declare_parameter("dry_run", true);
   declare_parameter("allow_motion", false);
+  declare_parameter("stage_protocol_enabled", false);
   declare_parameter("command_timeout_s", 0.2);
   declare_parameter("publish_rate_hz", 20.0);
   declare_parameter("wheel_diameter_m", 0.075);
@@ -77,6 +78,7 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   baud_rate_ = static_cast<int>(get_parameter("baud_rate").as_int());
   dry_run_ = get_parameter("dry_run").as_bool();
   allow_motion_ = get_parameter("allow_motion").as_bool();
+  stage_protocol_enabled_ = get_parameter("stage_protocol_enabled").as_bool();
   command_timeout_s_ = get_parameter("command_timeout_s").as_double();
   publish_rate_hz_ = get_parameter("publish_rate_hz").as_double();
   wheel_diameter_m_ = get_parameter("wheel_diameter_m").as_double();
@@ -110,6 +112,13 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
     [this](const geometry_msgs::msg::Twist::SharedPtr message) {
       command_callback(message);
     });
+  route_command_sub_ = create_subscription<robot_arm_interfaces::msg::RouteCommand>(
+    "/base/route_command", rclcpp::QoS(10),
+    [this](const robot_arm_interfaces::msg::RouteCommand::SharedPtr message) {
+      route_command_callback(message);
+    });
+  stage_feedback_pub_ = create_publisher<robot_arm_interfaces::msg::StageFeedback>(
+    "/base/stage_feedback", rclcpp::QoS(10));
   state_pub_ = create_publisher<robot_arm_interfaces::msg::BaseState>(
     "/base/state", rclcpp::QoS(10));
   wheel_state_pub_ = create_publisher<robot_arm_interfaces::msg::WheelState>(
@@ -137,8 +146,9 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
     [this]() { watchdog_callback(); });
 
   RCLCPP_INFO(
-    get_logger(), "base serial ready; motion=%s, protocol=CMD_WHEELS A B C D and FB feedback",
-    allow_motion_ ? "enabled" : "disabled");
+    get_logger(), "base serial ready; motion=%s, stage protocol=%s",
+    allow_motion_ ? "enabled" : "disabled",
+    stage_protocol_enabled_ ? "enabled" : "disabled");
 }
 
 BaseSerialNode::~BaseSerialNode()
@@ -198,14 +208,29 @@ void BaseSerialNode::close_serial()
 
 void BaseSerialNode::command_callback(const geometry_msgs::msg::Twist::SharedPtr message)
 {
-  if (!finite(message->linear.x) || !finite(message->linear.y) ||
-      !finite(message->angular.z))
+  // The route topic is authoritative in staged mode; cmd_vel is its monitor mirror.
+  if (!stage_protocol_enabled_) {
+    process_command(*message, 0);
+  }
+}
+
+void BaseSerialNode::route_command_callback(
+  const robot_arm_interfaces::msg::RouteCommand::SharedPtr message)
+{
+  if (stage_protocol_enabled_ && message->stage_id <= 16) {
+    process_command(message->velocity, message->stage_id);
+  }
+}
+
+void BaseSerialNode::process_command(const geometry_msgs::msg::Twist &input, const uint8_t stage_id)
+{
+  if (!finite(input.linear.x) || !finite(input.linear.y) || !finite(input.angular.z))
   {
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "ignoring non-finite base command");
     return;
   }
 
-  geometry_msgs::msg::Twist command = *message;
+  geometry_msgs::msg::Twist command = input;
   command.linear.x = clamp(command.linear.x, -1.0, 1.0);
   command.linear.y = clamp(command.linear.y, -1.0, 1.0);
   command.angular.z = clamp(command.angular.z, -2.0, 2.0);
@@ -227,10 +252,21 @@ void BaseSerialNode::command_callback(const geometry_msgs::msg::Twist::SharedPtr
     last_command_time_ = std::chrono::steady_clock::now();
     timeout_active_ = false;
   }
-  write_wheel_command(wheel_speed_mps);
+  write_wheel_command(wheel_speed_mps, stage_id);
 }
 
-void BaseSerialNode::write_wheel_command(const std::array<double, 4> &wheel_speed_mps)
+void BaseSerialNode::write_wheel_command(
+  const std::array<double, 4> &wheel_speed_mps, const std::optional<uint8_t> stage_id)
+{
+  std::scoped_lock lock(io_mutex_);
+  if (stage_id && *stage_id != stage_id_) {
+    stage_id_ = *stage_id;
+    stage_reached_ = false;
+  }
+  write_wheel_command_locked(wheel_speed_mps);
+}
+
+void BaseSerialNode::write_wheel_command_locked(const std::array<double, 4> &wheel_speed_mps)
 {
   if (!allow_motion_ || dry_run_ || fd_ < 0)
   {
@@ -241,12 +277,15 @@ void BaseSerialNode::write_wheel_command(const std::array<double, 4> &wheel_spee
   stream << "CMD_WHEELS";
   for (const auto speed : wheel_speed_mps)
   {
-    stream << ' ' << static_cast<long long>(std::llround(speed * 1000.0));
+    stream << ' ' << (stage_reached_ ? 0LL :
+      static_cast<long long>(std::llround(speed * 1000.0)));
+  }
+  if (stage_protocol_enabled_) {
+    stream << ' ' << static_cast<unsigned>(stage_id_);
   }
   stream << "\r\n";
   const auto text = stream.str();
 
-  std::scoped_lock lock(io_mutex_);
   std::size_t sent = 0;
   while (sent < text.size())
   {
@@ -259,6 +298,10 @@ void BaseSerialNode::write_wheel_command(const std::array<double, 4> &wheel_spee
       }
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 2000, "chassis serial write failed: %s", std::strerror(errno));
+      return;
+    }
+    if (count == 0) {
+      RCLCPP_ERROR(get_logger(), "chassis serial write made no progress");
       return;
     }
     sent += static_cast<std::size_t>(count);
@@ -379,6 +422,32 @@ void BaseSerialNode::parse_line(const std::string &line)
   std::istringstream stream(line);
   std::string tag;
   stream >> tag;
+  if (tag == "STAGE_FB") {
+    int stage = 0;
+    int reached = 0;
+    std::string extra;
+    if (!stage_protocol_enabled_ || !(stream >> stage >> reached) ||
+        stage < 1 || stage > 15 || (reached != 0 && reached != 1) || (stream >> extra)) {
+      return;
+    }
+    robot_arm_interfaces::msg::StageFeedback message;
+    {
+      std::scoped_lock lock(io_mutex_);
+      if (stage != stage_id_) {
+        return;
+      }
+      // A later false report or repeated speed command cannot release this stage.
+      stage_reached_ = stage_reached_ || reached == 1;
+      if (stage_reached_) {
+        write_wheel_command_locked({0.0, 0.0, 0.0, 0.0});
+      }
+      message.header.stamp = now();
+      message.stage_id = stage_id_;
+      message.reached = stage_reached_;
+      stage_feedback_pub_->publish(message);
+    }
+    return;
+  }
   if (tag == "FB")
   {
     uint32_t sequence = 0;

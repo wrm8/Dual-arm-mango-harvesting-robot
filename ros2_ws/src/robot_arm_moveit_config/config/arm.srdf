@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<robot name="arm_urdf_v1">
+  <group name="arm">
+    <chain base_link="base_link" tip_link="tcp_link" />
+  </group>
+
+  <disable_collisions link1="base_link" link2="link1" reason="Never" />
+  <disable_collisions link1="base_link" link2="link2" reason="Never" />
+  <disable_collisions link1="base_link" link2="link3" reason="Never" />
+  <disable_collisions link1="base_link" link2="link4" reason="Never" />
+  <disable_collisions link1="base_link" link2="link5" reason="Never" />
+  <disable_collisions link1="base_link" link2="tcp_link" reason="Never" />
+  <disable_collisions link1="link1" link2="link2" reason="Never" />
+  <disable_collisions link1="link1" link2="link3" reason="Never" />
+  <disable_collisions link1="link1" link2="link4" reason="Never" />
+  <disable_collisions link1="link1" link2="link5" reason="Never" />
+  <disable_collisions link1="link1" link2="tcp_link" reason="Never" />
+  <disable_collisions link1="link2" link2="link3" reason="Never" />
+  <disable_collisions link1="link2" link2="link4" reason="Never" />
+  <disable_collisions link1="link2" link2="link5" reason="Never" />
+  <disable_collisions link1="link2" link2="tcp_link" reason="Never" />
+  <disable_collisions link1="link3" link2="link4" reason="Never" />
+  <disable_collisions link1="link3" link2="link5" reason="Never" />
+  <disable_collisions link1="link3" link2="tcp_link" reason="Never" />
+  <disable_collisions link1="link4" link2="link5" reason="Never" />
+  <disable_collisions link1="link4" link2="tcp_link" reason="Never" />
+  <disable_collisions link1="link5" link2="tcp_link" reason="Never" />
+</robot>

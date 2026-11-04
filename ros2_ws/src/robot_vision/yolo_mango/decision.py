@@ -14,6 +14,9 @@ class Fruit:
     depth_m: float | None = None
     range_m: float | None = None
     surface_xyz_m: list[float] | None = None
+    width_px: float = 0.0
+    width_m: float | None = None
+    height_m: float | None = None
 
 
 def validate_config(cfg):
@@ -105,8 +108,6 @@ def decide(fruits, width, cfg):
             ambiguous = 'height_ratio_in_uncertain_band'
     if ambiguous:
         return reject(ambiguous)
-    if mode == 'per_side' and len(candidates) > 1:
-        return reject('multiple_small_candidates')
     if mode == 'unique_small' and len(candidates) != 1:
         return reject('expected_exactly_one_small_candidate')
     result['small_by_side'] = candidates
@@ -128,6 +129,7 @@ def decide(fruits, width, cfg):
             result['targets'].append({'id': f.id, 'reasons': reasons,
                                       'surface_xyz_m': f.surface_xyz_m})
     result.update(status='confirmed', reason=(
-        ('one_small_fruit' if candidates else 'no_small_fruit') if mode == 'per_side'
+        ('per_side_small_fruits' if len(candidates) > 1 else
+         'one_small_fruit' if candidates else 'no_small_fruit') if mode == 'per_side'
         else 'one_different_pair_one_similar_pair'))
     return result

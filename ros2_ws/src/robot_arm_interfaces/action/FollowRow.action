@@ -1,12 +1,16 @@
 # Current row navigation task. The row controller keeps running until the row end,
 # cancellation, or a sensor fault. direction is +1 for forward and -1 for reverse.
 int32 row_id
+# Photoelectric stages are 1..15; use 0 for encoder-only motion.
+uint8 stage_id
 int8 direction
 float64 max_speed_mps
 float64 side_target_m
 float64 front_slow_distance_m
 float64 front_stop_distance_m
 bool use_side_centering
+# 0=left, 1=right; ignored when use_side_centering is false.
+uint8 side_sensor
 bool reverse_stop_on_zero_velocity
 ---
 bool success

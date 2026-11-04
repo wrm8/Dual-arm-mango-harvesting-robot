@@ -2,6 +2,8 @@
 
 #include "robot_arm_interfaces/msg/base_state.hpp"
 #include "robot_arm_interfaces/msg/wheel_state.hpp"
+#include "robot_arm_interfaces/msg/route_command.hpp"
+#include "robot_arm_interfaces/msg/stage_feedback.hpp"
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -13,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -26,19 +29,28 @@ public:
 
 private:
   void command_callback(const geometry_msgs::msg::Twist::SharedPtr message);
+  void route_command_callback(const robot_arm_interfaces::msg::RouteCommand::SharedPtr message);
+  void process_command(const geometry_msgs::msg::Twist &command, uint8_t stage_id);
   void watchdog_callback();
   void read_loop();
   void parse_line(const std::string &line);
   void publish_state();
   void open_serial();
   void close_serial();
-  void write_wheel_command(const std::array<double, 4> &wheel_speed_mps);
+  void write_wheel_command(
+    const std::array<double, 4> &wheel_speed_mps,
+    std::optional<uint8_t> stage_id = std::nullopt);
+  void write_wheel_command_locked(const std::array<double, 4> &wheel_speed_mps);
   void send_zero_once();
 
   std::string serial_device_;
   int baud_rate_{115200};
   bool dry_run_{true};
   bool allow_motion_{false};
+  bool stage_protocol_enabled_{false};
+  // Both fields are protected by io_mutex_, alongside actual serial writes.
+  uint8_t stage_id_{0};
+  bool stage_reached_{false};
   double command_timeout_s_{0.2};
   double publish_rate_hz_{20.0};
   double wheel_diameter_m_{0.075};
@@ -77,6 +89,8 @@ private:
   bool have_imu_{false};
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr command_sub_;
+  rclcpp::Subscription<robot_arm_interfaces::msg::RouteCommand>::SharedPtr route_command_sub_;
+  rclcpp::Publisher<robot_arm_interfaces::msg::StageFeedback>::SharedPtr stage_feedback_pub_;
   rclcpp::Publisher<robot_arm_interfaces::msg::BaseState>::SharedPtr state_pub_;
   rclcpp::Publisher<robot_arm_interfaces::msg::WheelState>::SharedPtr wheel_state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;

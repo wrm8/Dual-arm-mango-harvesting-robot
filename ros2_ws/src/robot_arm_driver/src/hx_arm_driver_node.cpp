@@ -293,10 +293,35 @@ bool HxArmDriverNode::validate_trajectory(
       reason = "each trajectory point must have one position per joint";
       return false;
     }
-    if (!point.velocities.empty() || !point.accelerations.empty() || !point.effort.empty())
+    const auto joint_count = trajectory.joint_names.size();
+    if ((!point.velocities.empty() && point.velocities.size() != joint_count) ||
+      (!point.accelerations.empty() && point.accelerations.size() != joint_count) ||
+      (!point.effort.empty() && point.effort.size() != joint_count))
     {
-      reason = "this servo driver accepts position-only trajectory points";
+      reason = "non-empty trajectory fields must match joint_names";
       return false;
+    }
+    if (!point.effort.empty())
+    {
+      reason = "effort trajectories are unsupported by the servo driver";
+      return false;
+    }
+    // Servo speed remains controlled by goal_speed_; MoveIt derivatives are not tracked.
+    for (const auto value : point.velocities)
+    {
+      if (!std::isfinite(value))
+      {
+        reason = "trajectory contains a non-finite velocity";
+        return false;
+      }
+    }
+    for (const auto value : point.accelerations)
+    {
+      if (!std::isfinite(value))
+      {
+        reason = "trajectory contains a non-finite acceleration";
+        return false;
+      }
     }
     const int64_t point_ms = static_cast<int64_t>(point.time_from_start.sec) * 1000 +
       point.time_from_start.nanosec / 1000000;

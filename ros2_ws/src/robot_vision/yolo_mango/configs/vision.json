@@ -3,7 +3,7 @@
   "center_deadband_ratio": 0.02,
   "confidence": 0.6,
   "selection_mode": "per_side",
-  "tie_relative_tolerance": 0,
+  "tie_relative_tolerance": 0.05,
   "height_mode": "pixel",
   "similar_ratio": 0.92,
   "small_ratio": 0.82,
@@ -14,5 +14,5 @@
   "stable_frames": 8,
   "stable_center_px": 12,
   "stable_depth_m": 0.015,
-  "target_policy": "small_only"
+  "target_policy": "green_or_small"
 }

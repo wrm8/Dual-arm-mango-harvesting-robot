@@ -84,6 +84,8 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
   declare_parameter("default_front_slow_m", 0.30);
   declare_parameter("default_front_stop_m", 0.05);
   declare_parameter("default_safety_distance_m", 0.05);
+  declare_parameter("reverse_speed_mps", 0.20);
+  declare_parameter("reverse_distance_kp", 2.0);
   declare_parameter("reverse_distance_m", 0.70);
   declare_parameter("reverse_distance_tolerance_m", 0.05);
   declare_parameter("reverse_slow_distance_m", 0.25);
@@ -93,6 +95,18 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
   declare_parameter("shift_front_kp", 1.0);
   declare_parameter("max_front_correction_mps", 0.08);
   declare_parameter("mango_brake_time_s", 0.35);
+  declare_parameter("photoelectric_stop_timeout_s", 3.0);
+  declare_parameter("vision_tree_kp", 1.0);
+  declare_parameter("vision_tree_ki", 0.05);
+  declare_parameter("vision_tree_integral_limit", 0.2);
+  declare_parameter("vision_tree_max_speed_mps", 0.12);
+  declare_parameter("vision_tree_center_tolerance_ratio", 0.02);
+  declare_parameter("vision_stop_settle_s", 0.30);
+  declare_parameter("vision_observation_timeout_s", 0.60);
+  declare_parameter("vision_tree_search_distance_m", 0.35);
+  declare_parameter("vision_tree_alignment_timeout_s", 15.0);
+  declare_parameter("vision_tree_control_sign", 1.0);
+  (void)vision_stop_parameters();  // Also validate YAML values at startup.
 
   loop_hz_ = get_parameter("loop_hz").as_double();
   sensor_timeout_s_ = get_parameter("sensor_timeout_s").as_double();
@@ -117,6 +131,8 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
   default_front_slow_m_ = get_parameter("default_front_slow_m").as_double();
   default_front_stop_m_ = get_parameter("default_front_stop_m").as_double();
   default_safety_distance_m_ = get_parameter("default_safety_distance_m").as_double();
+  reverse_speed_mps = get_parameter("reverse_speed_mps").as_double();
+  reverse_distance_kp_ = get_parameter("reverse_distance_kp").as_double();
   reverse_distance_m_ = get_parameter("reverse_distance_m").as_double();
   reverse_distance_tolerance_m_ = get_parameter("reverse_distance_tolerance_m").as_double();
   reverse_slow_distance_m_ = get_parameter("reverse_slow_distance_m").as_double();
@@ -126,9 +142,12 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
   shift_front_kp_ = get_parameter("shift_front_kp").as_double();
   max_front_correction_mps_ = get_parameter("max_front_correction_mps").as_double();
   mango_brake_time_s_ = get_parameter("mango_brake_time_s").as_double();
+  photoelectric_stop_timeout_s_ = get_parameter("photoelectric_stop_timeout_s").as_double();
 
   if (loop_hz_ <= 0.0 || sensor_timeout_s_ <= 0.0 || max_lateral_speed_mps_ <= 0.0 ||
-      max_yaw_rate_rad_s_ <= 0.0 || stop_settle_s_ < 0.0 || reverse_distance_m_ <= 0.0 ||
+      max_yaw_rate_rad_s_ <= 0.0 || stop_settle_s_ < 0.0 ||
+      reverse_speed_mps <= 0.0 || reverse_speed_mps > 2.0 ||
+      !std::isfinite(reverse_distance_kp_) || reverse_distance_kp_ <= 0.0 ||reverse_distance_m_ <= 0.0 ||
       reverse_distance_tolerance_m_ < 0.0 || reverse_distance_tolerance_m_ >= reverse_slow_distance_m_ ||
       shift_side_target_m_ <= 0.0 || shift_side_slow_distance_m_ <= shift_side_target_m_ ||
       !std::isfinite(yaw_kp_) || !std::isfinite(yaw_ki_) ||
@@ -141,7 +160,8 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
       !std::isfinite(shift_wall_cancel_side_distance_m_) ||
       shift_wall_cancel_side_distance_m_ < 0.0 ||
       !std::isfinite(shift_wall_cancel_side_tolerance_m_) ||
-      shift_wall_cancel_side_tolerance_m_ < 0.0)
+      shift_wall_cancel_side_tolerance_m_ < 0.0 ||
+      !std::isfinite(photoelectric_stop_timeout_s_) || photoelectric_stop_timeout_s_ <= 0.0)
   {
     throw std::invalid_argument("invalid row navigation configuration");
   }
@@ -197,7 +217,18 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
 
       for (const auto &parameter : parameters) {
         double value = 0.0;
-        if (parameter.get_name() == "yaw_kp") {
+        if (parameter.get_name().rfind("vision_", 0) == 0) {
+          const auto &name = parameter.get_name();
+          const bool nonnegative = name == "vision_tree_ki" || name == "vision_stop_settle_s";
+          if (!parameter_as_double(parameter, value) || !std::isfinite(value) ||
+              (name == "vision_tree_control_sign" ? std::abs(value) != 1.0 :
+               (nonnegative ? value < 0.0 : value <= 0.0)) ||
+              (name == "vision_tree_center_tolerance_ratio" && value >= 0.5)) {
+            result.successful = false;
+            result.reason = "invalid vision stop parameter: " + name;
+            return result;
+          }
+        } else if (parameter.get_name() == "yaw_kp") {
           if (!parameter_as_double(parameter, value) || !std::isfinite(value)) {
             result.successful = false;
             result.reason = "yaw_kp must be a finite number";
@@ -300,7 +331,24 @@ RowNavigationNode::RowNavigationNode() : Node("row_navigation_node")
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
     "/base/odom", rclcpp::SensorDataQoS(),
     [this](const nav_msgs::msg::Odometry::SharedPtr message) { odom_callback(message); });
+  vision_sub_ = create_subscription<robot_arm_interfaces::msg::VisionRowObservation>(
+    "/vision/row_observation", rclcpp::SensorDataQoS(),
+    [this](const robot_arm_interfaces::msg::VisionRowObservation::SharedPtr message) {
+      std::scoped_lock lock(vision_mutex_);
+      vision_observation_ = *message;
+      vision_observation_time_ = std::chrono::steady_clock::now();
+      have_vision_observation_ = true;
+    });
+  vision_state_pub_ = create_publisher<robot_arm_interfaces::msg::VisionStopState>(
+    "/base/vision_stop_state", rclcpp::QoS(10));
   command_pub_ = create_publisher<geometry_msgs::msg::Twist>("/base/cmd_vel", rclcpp::QoS(10));
+  route_command_pub_ = create_publisher<robot_arm_interfaces::msg::RouteCommand>(
+    "/base/route_command", rclcpp::QoS(10));
+  stage_feedback_sub_ = create_subscription<robot_arm_interfaces::msg::StageFeedback>(
+    "/base/stage_feedback", rclcpp::QoS(10),
+    [this](const robot_arm_interfaces::msg::StageFeedback::SharedPtr message) {
+      stage_feedback_callback(message);
+    });
 
   follow_server_ = rclcpp_action::create_server<FollowRow>(
     this, "follow_row",
@@ -359,11 +407,139 @@ bool RowNavigationNode::fresh(const Sensors &snapshot, const bool need_odom) con
 
 void RowNavigationNode::publish_command(const geometry_msgs::msg::Twist &command)
 {
+  // Hold the lock through publication: feedback cannot be followed by an older
+  // nonzero command prepared in another route/StopBase thread.
+  std::scoped_lock lock(command_mutex_);
+  last_command_ = photoelectric_reached_ ? geometry_msgs::msg::Twist() : command;
+  robot_arm_interfaces::msg::RouteCommand message;
+  message.header.stamp = now();
+  message.stage_id = active_stage_id_;
+  message.velocity = last_command_;
+  route_command_pub_->publish(message);
+  command_pub_->publish(last_command_);
+}
+
+void RowNavigationNode::begin_stage(const uint8_t stage_id)
+{
+  if (stage_id == 1) {
+    std::scoped_lock lock(control_mutex_);
+    have_task_yaw_reference_ = false;
+  }
+  publish_vision_state(stage_id, VisionStopController::State::Idle, 0.0,
+    "route stage started; waiting for mango in depth range");
   {
     std::scoped_lock lock(command_mutex_);
-    last_command_ = command;
+    if (active_stage_id_ != stage_id) {
+      active_stage_id_ = stage_id;
+      photoelectric_reached_ = false;
+    }
   }
-  command_pub_->publish(command);
+  // Announce the stage with zero speeds before the first movement command.
+  publish_zero();
+}
+
+double RowNavigationNode::task_yaw_reference(const double observed_yaw)
+{
+  std::scoped_lock lock(control_mutex_);
+  if (!have_task_yaw_reference_) {
+    task_yaw_reference_rad_ = observed_yaw;
+    have_task_yaw_reference_ = true;
+  }
+  return task_yaw_reference_rad_;
+}
+
+void RowNavigationNode::publish_vision_state(
+  const uint8_t stage_id, const VisionStopController::State state,
+  const double error, const std::string &message)
+{
+  robot_arm_interfaces::msg::VisionStopState status;
+  status.header.stamp = now();
+  status.header.frame_id = "camera_color_optical_frame";
+  status.stage_id = stage_id;
+  status.state = static_cast<uint8_t>(state);
+  status.tree_center_error_ratio = std::isfinite(error) ? error : 0.0;
+  status.message = message;
+  vision_state_pub_->publish(status);
+}
+
+VisionStopController::Parameters RowNavigationNode::vision_stop_parameters() const
+{
+  VisionStopController::Parameters p;
+  p.kp = get_parameter("vision_tree_kp").as_double();
+  p.ki = get_parameter("vision_tree_ki").as_double();
+  p.integral_limit = get_parameter("vision_tree_integral_limit").as_double();
+  p.max_align_speed = get_parameter("vision_tree_max_speed_mps").as_double();
+  p.center_tolerance = get_parameter("vision_tree_center_tolerance_ratio").as_double();
+  p.settle_time = get_parameter("vision_stop_settle_s").as_double();
+  p.observation_timeout = get_parameter("vision_observation_timeout_s").as_double();
+  p.search_distance = get_parameter("vision_tree_search_distance_m").as_double();
+  p.alignment_timeout = get_parameter("vision_tree_alignment_timeout_s").as_double();
+  p.control_sign = get_parameter("vision_tree_control_sign").as_double();
+  for (const auto value : {p.kp, p.integral_limit, p.max_align_speed,
+      p.center_tolerance, p.observation_timeout, p.search_distance, p.alignment_timeout}) {
+    if (!std::isfinite(value) || value <= 0.0) {
+      throw std::invalid_argument("vision stop parameters must be finite and positive");
+    }
+  }
+  if (!std::isfinite(p.ki) || p.ki < 0.0 || !std::isfinite(p.settle_time) ||
+      p.settle_time < 0.0 || p.center_tolerance >= 0.5 || std::abs(p.control_sign) != 1.0) {
+    throw std::invalid_argument("invalid vision integral, settle time or control sign");
+  }
+  return p;
+}
+
+void RowNavigationNode::stage_feedback_callback(
+  const robot_arm_interfaces::msg::StageFeedback::SharedPtr message)
+{
+  {
+    std::scoped_lock lock(command_mutex_);
+    if (message->stage_id == 0 || message->stage_id != active_stage_id_ || !message->reached) {
+      return;
+    }
+    photoelectric_reached_ = true;
+  }
+  publish_zero();
+}
+
+RowNavigationNode::PhotoelectricStop RowNavigationNode::photoelectric_stop(
+  const uint8_t stage_id, std::chrono::steady_clock::time_point &started,
+  std::chrono::steady_clock::time_point &stopped_since)
+{
+  {
+    std::scoped_lock lock(command_mutex_);
+    if (stage_id == 0 || stage_id != active_stage_id_ || !photoelectric_reached_) {
+      return PhotoelectricStop::NotTriggered;
+    }
+  }
+  publish_zero();
+  const auto current = std::chrono::steady_clock::now();
+  if (started == std::chrono::steady_clock::time_point{}) {
+    started = current;
+    RCLCPP_INFO(get_logger(), "photoelectric arrival at stage %u; holding zero until stopped",
+      static_cast<unsigned>(stage_id));
+  }
+  const auto snapshot = sensors();
+  const auto &velocity = snapshot.odom.twist.twist;
+  const bool stopped = snapshot.have_odom &&
+    snapshot.odom_time >= started &&
+    std::chrono::duration<double>(current - snapshot.odom_time).count() <= sensor_timeout_s_ &&
+    std::isfinite(velocity.linear.x) && std::isfinite(velocity.linear.y) &&
+    std::isfinite(velocity.angular.z) &&
+    std::abs(velocity.linear.x) < stop_speed_epsilon_mps_ &&
+    std::abs(velocity.linear.y) < stop_speed_epsilon_mps_ &&
+    std::abs(velocity.angular.z) < stop_angular_epsilon_rad_s_;
+  if (stopped) {
+    if (stopped_since == std::chrono::steady_clock::time_point{}) {
+      stopped_since = current;
+    }
+    if (std::chrono::duration<double>(current - stopped_since).count() >= stop_settle_s_) {
+      return PhotoelectricStop::Stopped;
+    }
+  } else {
+    stopped_since = std::chrono::steady_clock::time_point{};
+  }
+  return std::chrono::duration<double>(current - started).count() >= photoelectric_stop_timeout_s_ ?
+    PhotoelectricStop::TimedOut : PhotoelectricStop::Waiting;
 }
 
 void RowNavigationNode::publish_zero()
@@ -444,7 +620,7 @@ rclcpp_action::GoalResponse RowNavigationNode::follow_goal(
 {
   if ((goal->direction != 1 && goal->direction != -1) || goal->max_speed_mps <= 0.0 ||
       goal->max_speed_mps > 2.0 || goal->front_slow_distance_m <= goal->front_stop_distance_m ||
-      goal->front_stop_distance_m <= 0.0)
+      goal->front_stop_distance_m <= 0.0 || goal->stage_id > 16 || goal->side_sensor > 1)
   {
     return rclcpp_action::GoalResponse::REJECT;
   }
@@ -464,6 +640,7 @@ rclcpp_action::CancelResponse RowNavigationNode::follow_cancel(
 
 void RowNavigationNode::follow_accepted(const std::shared_ptr<FollowHandle> &handle)
 {
+  begin_stage(handle->get_goal()->stage_id);
   std::thread{[this, handle]() { execute_follow(handle); }}.detach();
 }
 
@@ -471,20 +648,55 @@ void RowNavigationNode::execute_follow(const std::shared_ptr<FollowHandle> &hand
 {
   auto result = std::make_shared<FollowRow::Result>();
   const auto goal = handle->get_goal();
-  const auto initial = sensors();
+  //const auto initial = sensors();
+
+  auto initial = sensors();
+  const auto ready_deadline =
+    std::chrono::steady_clock::now() + 3s;
+
+  while (rclcpp::ok() &&
+        !handle->is_canceling() &&
+        !fresh(initial, true) &&
+        std::chrono::steady_clock::now() < ready_deadline)
+  {
+    publish_zero();
+    std::this_thread::sleep_for(50ms);
+    initial = sensors();
+  }
+
+  if (!rclcpp::ok()) {
+    active_.store(false);
+    return;
+  }
+
+  if (!handle->is_canceling() && !fresh(initial, true))
+  {
+    publish_zero();
+    set_phase(RoutePhase::Fault);
+    result->success = false;
+    result->reason = kSensorFault;
+    result->message = "ultrasonic or odometry not ready after 3 seconds";
+    handle->abort(result);
+    active_.store(false);
+    return;
+  }
+
   const bool encoder_reverse = goal->direction < 0;
   const bool need_odom = true;
   const auto start_odom = initial.odom;
-  const auto target_yaw =
-    initial.have_odom ? yaw_from_quaternion(initial.odom.pose.pose.orientation) : 0.0;
+  const auto target_yaw = task_yaw_reference(
+    yaw_from_quaternion(initial.odom.pose.pose.orientation));
   const auto period = std::chrono::duration<double>(1.0 / loop_hz_);
   auto next = std::chrono::steady_clock::now();
   double yaw_integral = 0.0;
   double limited_linear_x = 0.0;
   bool reverse_motion_started = false;
   auto reverse_zero_since = std::chrono::steady_clock::time_point{};
+  auto photoelectric_started = std::chrono::steady_clock::time_point{};
+  auto photoelectric_stopped_since = std::chrono::steady_clock::time_point{};
   std::deque<double> front_history;
   std::deque<double> left_history;
+  std::deque<double> right_history;
   double filtered_front = std::numeric_limits<double>::quiet_NaN();
 
   while (rclcpp::ok())
@@ -499,6 +711,28 @@ void RowNavigationNode::execute_follow(const std::shared_ptr<FollowHandle> &hand
       handle->canceled(result);
       active_.store(false);
       return;
+    }
+
+    const auto photoelectric = photoelectric_stop(
+      goal->stage_id, photoelectric_started, photoelectric_stopped_since);
+    if (photoelectric != PhotoelectricStop::NotTriggered) {
+      set_phase(RoutePhase::Braking);
+      if (photoelectric == PhotoelectricStop::Stopped || photoelectric == PhotoelectricStop::TimedOut) {
+        result->success = photoelectric == PhotoelectricStop::Stopped;
+        result->reason = result->success ? kReachedEnd : kSensorFault;
+        result->message = result->success ?
+          "photoelectric arrival at stage " + std::to_string(goal->stage_id) :
+          "photoelectric stop: fresh zero-velocity feedback was not confirmed before timeout";
+        const auto current = sensors();
+        result->traveled_m = std::abs(planar_longitudinal_displacement(start_odom, current.odom));
+        set_phase(result->success ? RoutePhase::Stopped : RoutePhase::Fault);
+        active_.store(false);
+        if (result->success) handle->succeed(result); else handle->abort(result);
+        return;
+      }
+      next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+      std::this_thread::sleep_until(next);
+      continue;
     }
 
     const auto snapshot = sensors();
@@ -525,9 +759,18 @@ void RowNavigationNode::execute_follow(const std::shared_ptr<FollowHandle> &hand
       traveled = std::max(
         0.0, -planar_longitudinal_displacement(start_odom, snapshot.odom));
       const double remaining = reverse_distance_m_ - traveled;
-      scale = speed_scale(
-        remaining, reverse_slow_distance_m_, reverse_distance_tolerance_m_);
+
+      const double braking_distance =
+      std::max(0.0, remaining - reverse_distance_tolerance_m_);
+      const double proportional_speed =
+      std::sqrt(2.0 * max_deceleration_mps2_ * braking_distance);
+
+      scale = clamp(
+      proportional_speed / goal->max_speed_mps,0.0, 1.0);
       reached = remaining <= reverse_distance_tolerance_m_;
+      // scale = speed_scale(
+      //   remaining, reverse_slow_distance_m_, reverse_distance_tolerance_m_);
+      // reached = remaining <= reverse_distance_tolerance_m_;
 
       const double wheel_speed =
         std::abs(snapshot.odom.twist.twist.linear.x);
@@ -599,18 +842,24 @@ void RowNavigationNode::execute_follow(const std::shared_ptr<FollowHandle> &hand
     geometry_msgs::msg::Twist command;
     command.linear.x = limited_linear_x;
 
-    if (!reached && goal->use_side_centering && goal->direction > 0)
+    if (!reached && goal->use_side_centering)
     {
-      const double left_distance = snapshot.ultrasonic.left_valid &&
-        std::isfinite(snapshot.ultrasonic.left_m) ?
-        snapshot.ultrasonic.left_m : std::numeric_limits<double>::quiet_NaN();
-      const double filtered_left = median_filter_update(
-        left_history, left_distance, motion.ultrasonic_filter_window);
-      if (std::isfinite(filtered_left))
+      const bool right_side = goal->side_sensor == 1;
+      const bool side_valid = right_side ? snapshot.ultrasonic.right_valid :
+        snapshot.ultrasonic.left_valid;
+      const double side_distance = right_side ? snapshot.ultrasonic.right_m :
+        snapshot.ultrasonic.left_m;
+      const double raw_side = side_valid && std::isfinite(side_distance) ?
+        side_distance : std::numeric_limits<double>::quiet_NaN();
+      auto &side_history = right_side ? right_history : left_history;
+      const double filtered_side = median_filter_update(
+        side_history, raw_side, motion.ultrasonic_filter_window);
+      if (std::isfinite(filtered_side))
       {
-        const double side_error = filtered_left - goal->side_target_m;
+        const double side_error = filtered_side - goal->side_target_m;
+        const double correction_sign = right_side ? -1.0 : 1.0;
         command.linear.y = clamp(
-          side_kp_ * side_error,
+          correction_sign * side_kp_ * side_error,
           -max_lateral_speed_mps_, max_lateral_speed_mps_);
       }
     }
@@ -684,7 +933,7 @@ rclcpp_action::GoalResponse RowNavigationNode::shift_goal(
       goal->wall_sensor > 2 || goal->wall_target_m < 0.0 ||
       goal->wall_enable_tolerance_m < 0.0 ||
       goal->wall_control_cancel_side_distance_m < 0.0 ||
-      goal->wall_control_cancel_side_tolerance_m < 0.0)
+      goal->wall_control_cancel_side_tolerance_m < 0.0 || goal->stage_id > 16)
   {
     return rclcpp_action::GoalResponse::REJECT;
   }
@@ -703,6 +952,7 @@ rclcpp_action::CancelResponse RowNavigationNode::shift_cancel(
 
 void RowNavigationNode::shift_accepted(const std::shared_ptr<ShiftHandle> &handle)
 {
+  begin_stage(handle->get_goal()->stage_id);
   std::thread{[this, handle]() { execute_shift(handle); }}.detach();
 }
 
@@ -722,7 +972,8 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
   }
 
   const auto start_odom = initial.odom;
-  const auto target_yaw = yaw_from_quaternion(start_odom.pose.pose.orientation);
+  const auto target_yaw = task_yaw_reference(
+    yaw_from_quaternion(start_odom.pose.pose.orientation));
   const auto target_side = goal->direction > 0 ? 1 : -1;
   const auto safety_distance = goal->safety_distance_m > 0.0 ?
     goal->safety_distance_m : default_safety_distance_m_;
@@ -732,10 +983,15 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
   double limited_linear_x = 0.0;
   double limited_linear_y = 0.0;
   bool wall_control_enabled = false;
+  auto photoelectric_started = std::chrono::steady_clock::time_point{};
+  auto photoelectric_stopped_since = std::chrono::steady_clock::time_point{};
   std::deque<double> front_history;
   std::deque<double> rear_history;
   std::deque<double> left_history;
   std::deque<double> right_history;
+  VisionStopController vision_stop;
+  auto last_vision_state = VisionStopController::State::Idle;
+  const auto vision_stage_started = now();
 
   while (rclcpp::ok())
   {
@@ -746,9 +1002,45 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
       result->success = false;
       result->reason = kCanceled;
       result->message = "lane shift canceled; the mission will restart this step";
+      publish_vision_state(goal->stage_id, VisionStopController::State::Idle, 0.0,
+        "visual stop canceled with lane shift");
       handle->canceled(result);
       active_.store(false);
       return;
+    }
+
+    const auto photoelectric = photoelectric_stop(
+      goal->stage_id, photoelectric_started, photoelectric_stopped_since);
+    if (photoelectric != PhotoelectricStop::NotTriggered) {
+      set_phase(RoutePhase::ShiftBraking);
+      if (vision_stop.active()) {
+        publish_zero();
+        result->success = false;
+        result->reason = kSafetyLimit;
+        result->message = "photoelectric route end interrupted tree alignment; holding zero";
+        publish_vision_state(goal->stage_id, VisionStopController::State::Fault,
+          0.0, result->message);
+        set_phase(RoutePhase::Fault);
+        handle->abort(result);
+        active_.store(false);
+        return;
+      }
+      if (photoelectric == PhotoelectricStop::Stopped || photoelectric == PhotoelectricStop::TimedOut) {
+        result->success = photoelectric == PhotoelectricStop::Stopped;
+        result->reason = result->success ? kReachedEnd : kSensorFault;
+        result->message = result->success ?
+          "photoelectric arrival at stage " + std::to_string(goal->stage_id) :
+          "photoelectric stop: fresh zero-velocity feedback was not confirmed before timeout";
+        const auto current = sensors();
+        result->traveled_m = std::abs(planar_lateral_displacement(start_odom, current.odom));
+        set_phase(result->success ? RoutePhase::Stopped : RoutePhase::Fault);
+        active_.store(false);
+        if (result->success) handle->succeed(result); else handle->abort(result);
+        return;
+      }
+      next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+      std::this_thread::sleep_until(next);
+      continue;
     }
 
     const auto snapshot = sensors();
@@ -758,6 +1050,8 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
       result->success = false;
       result->reason = kSensorFault;
       result->message = "odometry or ultrasonic data is stale during lane shift";
+      publish_vision_state(goal->stage_id, VisionStopController::State::Fault,
+        0.0, result->message);
       set_phase(RoutePhase::Fault);
       handle->abort(result);
       active_.store(false);
@@ -797,6 +1091,61 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
       0.0, static_cast<double>(goal->direction) *
       planar_lateral_displacement(start_odom, snapshot.odom));
 
+    const auto visual_parameters = vision_stop_parameters();
+    VisionStopController::Input visual_input;
+    const auto steady_now = std::chrono::steady_clock::now();
+    visual_input.now = std::chrono::duration<double>(steady_now.time_since_epoch()).count();
+    robot_arm_interfaces::msg::VisionRowObservation observation;
+    {
+      std::scoped_lock lock(vision_mutex_);
+      observation = vision_observation_;
+      const double acquisition_age = now().seconds() -
+        rclcpp::Time(observation.header.stamp).seconds();
+      const double reception_age = std::chrono::duration<double>(
+        steady_now - vision_observation_time_).count();
+      visual_input.have_observation = have_vision_observation_ && acquisition_age >= -0.1 &&
+        rclcpp::Time(observation.header.stamp) >= vision_stage_started;
+      visual_input.observation_time = visual_input.now -
+        std::max({0.0, acquisition_age, reception_age});
+    }
+    visual_input.frame_sequence = observation.frame_sequence;
+    visual_input.mango_in_range = observation.mango_in_range;
+    visual_input.tree_valid = observation.tree_valid;
+    // Image-width ratio has no metric unit: never subtract odometry in meters.
+    // Positive error is image-right; vision_tree_control_sign maps it to chassis Y.
+    visual_input.tree_error = observation.tree_center_error_ratio;
+    visual_input.lateral_position = planar_lateral_displacement(start_odom, snapshot.odom);
+    const auto &measured_velocity = snapshot.odom.twist.twist;
+    visual_input.stopped = std::isfinite(measured_velocity.linear.x) &&
+      std::isfinite(measured_velocity.linear.y) && std::isfinite(measured_velocity.angular.z) &&
+      std::abs(measured_velocity.linear.x) < stop_speed_epsilon_mps_ &&
+      std::abs(measured_velocity.linear.y) < stop_speed_epsilon_mps_ &&
+      std::abs(measured_velocity.angular.z) < stop_angular_epsilon_rad_s_ &&
+      std::abs(limited_linear_x) < stop_speed_epsilon_mps_ &&
+      std::abs(limited_linear_y) < stop_speed_epsilon_mps_;
+    const auto visual_output = vision_stop.update(visual_input, visual_parameters,
+      goal->vision_stop_enabled, goal->max_speed_mps, goal->direction);
+    if (vision_stop.active()) {
+      publish_vision_state(goal->stage_id, visual_output.state,
+        visual_input.tree_error, visual_output.message);
+      if (last_vision_state != visual_output.state) {
+        RCLCPP_INFO(get_logger(), "visual stop at route step %u: state=%u %s",
+          static_cast<unsigned>(goal->stage_id), static_cast<unsigned>(visual_output.state),
+          visual_output.message.c_str());
+        last_vision_state = visual_output.state;
+      }
+      if (visual_output.state == VisionStopController::State::Fault) {
+        publish_zero();
+        set_phase(RoutePhase::Fault);
+        result->success = false;
+        result->reason = kSensorFault;
+        result->message = visual_output.message;
+        handle->abort(result);
+        active_.store(false);
+        return;
+      }
+    }
+
     bool reached = false;
     double scale = 1.0;
     if (side_valid)
@@ -812,6 +1161,8 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
         result->success = false;
         result->reason = kSafetyLimit;
         result->message = "target-side ultrasonic safety limit reached";
+        publish_vision_state(goal->stage_id, VisionStopController::State::Fault,
+          visual_input.tree_error, result->message);
         set_phase(RoutePhase::Fault);
         handle->abort(result);
         active_.store(false);
@@ -829,6 +1180,21 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
     {
       reached = true;
     }
+
+    if (vision_stop.active() && reached &&
+        visual_output.state != VisionStopController::State::Holding) {
+      publish_zero();
+      result->success = false;
+      result->reason = kSafetyLimit;
+      result->message = "lane endpoint reached before tree centering; holding zero";
+      publish_vision_state(goal->stage_id, VisionStopController::State::Fault,
+        visual_input.tree_error, result->message);
+      set_phase(RoutePhase::Fault);
+      handle->abort(result);
+      active_.store(false);
+      return;
+    }
+    if (vision_stop.active()) {reached = false;}
 
     double wall_distance = 0.0;
     bool wall_valid = false;
@@ -871,25 +1237,51 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
       wall_control_enabled = false;
     }
 
-    const double desired_linear_x = (!reached && wall_control_enabled && wall_valid) ?
+    const double desired_linear_x = (!vision_stop.active() && !reached && wall_control_enabled && wall_valid) ?
       clamp(
+        (goal->wall_sensor == 2 ? -1.0 : 1.0) *
         shift_front_kp_ * (wall_distance - wall_target),
         -max_front_correction_mps_, max_front_correction_mps_) : 0.0;
-    const double desired_linear_y = reached ? 0.0 :
-      static_cast<double>(goal->direction) * goal->max_speed_mps * scale;
-
-    limited_linear_x = slew_velocity(
-      desired_linear_x, limited_linear_x, motion.max_acceleration_mps2,
-      motion.max_deceleration_mps2, period.count());
-    limited_linear_y = slew_velocity(
-      desired_linear_y, limited_linear_y, motion.max_acceleration_mps2,
-      motion.max_deceleration_mps2, period.count());
+    const double desired_linear_y = vision_stop.active() ? visual_output.velocity :
+      (reached ? 0.0 : static_cast<double>(goal->direction) * goal->max_speed_mps * scale);
+    // Centering may reverse y, so check the actual commanded side as well.
+    if (vision_stop.active() &&
+        ((desired_linear_y > 0.0 && std::isfinite(raw_left) && raw_left < safety_distance) ||
+         (desired_linear_y < 0.0 && std::isfinite(raw_right) && raw_right < safety_distance))) {
+      publish_zero();
+      result->success = false;
+      result->reason = kSafetyLimit;
+      result->message = "side ultrasonic safety limit during tree centering";
+      publish_vision_state(goal->stage_id, VisionStopController::State::Fault,
+        visual_input.tree_error, result->message);
+      set_phase(RoutePhase::Fault);
+      handle->abort(result);
+      active_.store(false);
+      return;
+    }
+    if (vision_stop.active()) {
+      limited_linear_x = desired_linear_x;
+      limited_linear_y = desired_linear_y;
+    } else {
+      limited_linear_x = slew_velocity(
+        desired_linear_x, limited_linear_x, motion.max_acceleration_mps2,
+        motion.max_deceleration_mps2, period.count());
+      limited_linear_y = slew_velocity(
+        desired_linear_y, limited_linear_y, motion.max_acceleration_mps2,
+        motion.max_deceleration_mps2, period.count());
+    }
+    if (visual_output.state == VisionStopController::State::Holding) {
+      limited_linear_x = 0.0;
+      limited_linear_y = 0.0;
+      set_phase(RoutePhase::Stopped);
+    }
 
     geometry_msgs::msg::Twist command;
     command.linear.x = limited_linear_x;
     command.linear.y = limited_linear_y;
 
-    if (!reached)
+    if (!reached && visual_output.state != VisionStopController::State::Holding &&
+        visual_output.state != VisionStopController::State::Settling)
     {
       const auto yaw = yaw_from_quaternion(snapshot.odom.pose.pose.orientation);
       const auto control = yaw_control_parameters();
@@ -927,14 +1319,19 @@ void RowNavigationNode::execute_shift(const std::shared_ptr<ShiftHandle> &handle
       return;
     }
 
-    set_phase(reached || scale < 1.0 ?
-      RoutePhase::ShiftBraking : RoutePhase::ShiftLane);
+    set_phase(visual_output.state == VisionStopController::State::Holding ?
+      RoutePhase::Stopped : (vision_stop.active() || reached || scale < 1.0 ?
+      RoutePhase::ShiftBraking : RoutePhase::ShiftLane));
 
     auto feedback = std::make_shared<ShiftLane::Feedback>();
     feedback->progress = static_cast<float>(
       clamp(traveled / goal->distance_m, 0.0, 1.0));
     feedback->phase = reached || scale < 1.0 ?
       "braking" : "shifting_lane";
+    if (vision_stop.active()) {
+      feedback->phase = visual_output.state == VisionStopController::State::Holding ?
+        "vision_holding" : "vision_centering";
+    }
     feedback->left_distance_m =
       std::isfinite(filtered_left) ? filtered_left : snapshot.ultrasonic.left_m;
     feedback->right_distance_m =

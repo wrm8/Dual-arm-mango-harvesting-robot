@@ -2,6 +2,8 @@
 uint8 WALL_NONE=0
 uint8 WALL_FRONT=1
 uint8 WALL_REAR=2
+# Photoelectric stages are 1..15; use 0 for encoder-only motion.
+uint8 stage_id
 int8 direction
 float64 distance_m
 float64 max_speed_mps
@@ -12,6 +14,9 @@ float64 wall_enable_tolerance_m
 bool disable_wall_control_on_side_distance
 float64 wall_control_cancel_side_distance_m
 float64 wall_control_cancel_side_tolerance_m
+# False for direct action callers unless explicitly enabled. Holds this action
+# RUNNING after tree centering; it does not advance the route or pick fruit.
+bool vision_stop_enabled
 ---
 bool success
 uint8 reason

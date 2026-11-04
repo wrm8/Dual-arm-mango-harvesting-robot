@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def detect(model, bgr, cfg, imgsz, device, depth=None, intr=None, rs=None,
-           pixel_to_source=None):
+           pixel_to_source=None, trunks=None):
     import cv2
     import numpy as np
     prediction = model.predict(bgr, conf=cfg['confidence'], imgsz=imgsz,
@@ -28,7 +28,8 @@ def detect(model, bgr, cfg, imgsz, device, depth=None, intr=None, rs=None,
     masks = prediction.masks.data.cpu().numpy()
     for i, box in enumerate(prediction.boxes):
         class_name = model.names[int(box.cls.item())]
-        if class_name == 'tree_trunk':
+        is_tree = class_name == 'tree_trunk'
+        if is_tree and trunks is None:
             continue
         mask = (masks[i] > 0.5).astype('uint8')
         if mask.shape != bgr.shape[:2]:
@@ -38,7 +39,7 @@ def detect(model, bgr, cfg, imgsz, device, depth=None, intr=None, rs=None,
             continue
         x1, y1, x2, y2 = box.xyxy[0].cpu().tolist()
         f = Fruit(i, class_name, (x1+x2)/2, (y1+y2)/2,
-                  y2-y1, float(box.conf.item()))
+                  y2-y1, float(box.conf.item()), width_px=x2-x1)
         if depth is not None:
             inner = cv2.erode(mask, np.ones((5, 5), dtype='uint8'))
             valid = ((inner > 0) & np.isfinite(depth) &
@@ -59,6 +60,14 @@ def detect(model, bgr, cfg, imgsz, device, depth=None, intr=None, rs=None,
                     f.surface_xyz_m = list(rs.rs2_deproject_pixel_to_point(
                         intr, pixel, float(values[k])))
                     f.range_m = float(sum(value * value for value in f.surface_xyz_m) ** 0.5)
+                    def point_at(x, y):
+                        pixel = pixel_to_source(float(x), float(y)) if pixel_to_source else [x, y]
+                        return np.asarray(rs.rs2_deproject_pixel_to_point(intr, pixel, f.depth_m))
+                    f.width_m = float(np.linalg.norm(point_at(x2, f.cy) - point_at(x1, f.cy)))
+                    f.height_m = float(np.linalg.norm(point_at(f.cx, y2) - point_at(f.cx, y1)))
+        if is_tree:
+            trunks.append(asdict(f))
+            continue
         fruits.append(f)
         cv2.putText(overlay, f'id={i} h={f.height_px:.1f}', (int(x1), max(15, int(y1)-10)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)

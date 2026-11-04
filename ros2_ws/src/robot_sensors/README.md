@@ -67,6 +67,10 @@ ros2 action send_goal /follow_row \
 robot_arm_interfaces/action/FollowRow \
 "{direction: 1, row_id: 0, max_speed_mps: 0.50, side_target_m: 0.40, front_slow_distance_m: 0.80, front_stop_distance_m: 0.20, use_side_centering: true, reverse_stop_on_zero_velocity: false}" \
 --feedback
+
+ros2 action send_goal /follow_row robot_arm_interfaces/action/FollowRow \
+"{row_id: 0, stage_id: 1, direction: 1, max_speed_mps: 0.70, side_target_m: 0.05, front_slow_distance_m: 0.30, front_stop_distance_m: 0.05, use_side_centering: true, reverse_stop_on_zero_velocity: false}" \
+--feedback
 # 横移
 ros2 action send_goal /shift_lane \
   robot_arm_interfaces/action/ShiftLane \
@@ -76,6 +80,10 @@ ros2 action send_goal /shift_lane \
 ros2 action send_goal /shift_lane \
 robot_arm_interfaces/action/ShiftLane \
 "{direction: -1, distance_m: 0.50, max_speed_mps: 0.60, safety_distance_m: 0.1, wall_sensor: 1, wall_target_m: 0.40, wall_enable_tolerance_m: 0.40, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" \
+--feedback
+
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane \
+"{stage_id: 0, direction: -1, distance_m: 0.30, max_speed_mps: 0.6, safety_distance_m: 0.05, wall_sensor: 0, wall_target_m: 0.05, wall_enable_tolerance_m: 0.10, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" \
 --feedback
 # 后退（编码器）
 ros2 action send_goal /follow_row \
@@ -91,6 +99,7 @@ ros2 topic hz /base/ultrasonic
 ros2 topic echo --qos-profile sensor_data /base/ultrasonic
 ros2 topic echo --once /base/odom
 ros2 topic echo /base/state --field yaw_rad
+ros2 topic echo /vision/row_observation
 
 # 命令参数
 | 字段 | 当前值 | 作用 |
@@ -106,3 +115,32 @@ ros2 topic echo /base/state --field yaw_rad
 | `wall_control_cancel_side_distance_m` | `0.25` | 侧面距离目标，单位米 |
 | `wall_control_cancel_side_tolerance_m` | `0.02` | 判断范围。实际侧距在 `0.23~0.27 m` 时触发取消 |
 | `--feedback` | - | 在终端持续显示 action 反馈 |
+
+# 15段流程action
+1.距离很近
+ros2 action send_goal /follow_row robot_arm_interfaces/action/FollowRow "{row_id: 0, stage_id: 1, direction: 1, max_speed_mps: 0.90, side_target_m: 0.05, front_slow_distance_m: 0.80, front_stop_distance_m: 0.10, use_side_centering: true, reverse_stop_on_zero_velocity: false}" --feedback
+
+2.速度太快撞
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 2, direction: -1, distance_m: 0.30, max_speed_mps: 0.9, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+3.后退，距离大了
+ros2 action send_goal /follow_row robot_arm_interfaces/action/FollowRow "{row_id: 0, stage_id: 3, direction: -1, max_speed_mps: 0.50, side_target_m: 0.05, front_slow_distance_m: 0.30, front_stop_distance_m: 0.05, use_side_centering: true, reverse_stop_on_zero_velocity: false}" --feedback
+4.左边距离大了一点点，但是没问题，
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 4, direction: 1, distance_m: 0.30, max_speed_mps: 0.6, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+5.后退速度小了，还是多了一点点
+ros2 action send_goal /follow_row robot_arm_interfaces/action/FollowRow "{row_id: 0, stage_id: 5, direction: -1, max_speed_mps: 0.40, side_target_m: 0.05, front_slow_distance_m: 0.30, front_stop_distance_m: 0.05, use_side_centering: true, reverse_stop_on_zero_velocity: false}" --feedback
+6.完美不过横移中间有点卡顿
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 6, direction: -1, distance_m: 0.30, max_speed_mps: 0.6, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+7.比较准，但是慢
+ros2 action send_goal /follow_row robot_arm_interfaces/action/FollowRow "{row_id: 0, stage_id: 7, direction: -1, max_speed_mps: 0.35, side_target_m: 0.05, front_slow_distance_m: 0.30, front_stop_distance_m: 0.05, use_side_centering: true, reverse_stop_on_zero_velocity: false}" --feedback
+8.
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 8, direction: 1, distance_m: 0.30, max_speed_mps: 0.6, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+9.
+10.
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 10, direction: -1, distance_m: 0.30, max_speed_mps: 0.6, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+15.
+ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane "{stage_id: 15, direction: 1, distance_m: 0.30, max_speed_mps: 0.7, safety_distance_m: 0.04, wall_sensor: 1, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02}" --feedback
+
+
+
+
+

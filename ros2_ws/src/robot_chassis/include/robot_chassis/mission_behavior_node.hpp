@@ -18,7 +18,7 @@ class MissionBehaviorNode final : public rclcpp::Node
 public:
   struct RouteParameters
   {
-    int step_count{15};
+    int step_count{16};
     int step_index{0};
     int row_index{0};
     int8_t direction{1};
@@ -26,10 +26,14 @@ public:
     double row_speed_mps{0.20};
     double shift_distance_m{0.30};
     double shift_speed_mps{0.10};
+    bool shift_vision_stop_enabled{false};
     double side_target_m{0.05};
     double front_slow_distance_m{0.30};
     double front_stop_distance_m{0.05};
+    uint8_t side_sensor{0};
     double shift_safety_distance_m{0.05};
+    double reverse_speed_mps{0.50};
+    //double reverse_distance_kp{2.0};
     double reverse_distance_m{0.70};
     bool reverse_by_encoder{true};
     bool shift_by_side_wall{true};

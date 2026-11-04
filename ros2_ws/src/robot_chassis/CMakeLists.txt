@@ -45,4 +45,12 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
+if(BUILD_TESTING)
+  add_executable(test_vision_stop_controller test/test_vision_stop_controller.cpp)
+  target_include_directories(test_vision_stop_controller PRIVATE include)
+  add_test(NAME vision_stop_controller COMMAND test_vision_stop_controller)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(photoelectric_integration test/test_photoelectric.py TIMEOUT 180)
+endif()
+
 ament_package()
