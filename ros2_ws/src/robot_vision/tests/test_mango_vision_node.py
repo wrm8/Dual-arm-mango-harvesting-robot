@@ -1,6 +1,7 @@
 """Exercise the real frame/stop handshake without a camera, GPU or moving base."""
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from rclpy.parameter import Parameter
 from rclpy.time import Time
 from robot_arm_interfaces.msg import VisionStopState
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get('MANGO_TEST_SOURCE_ROOT', Path(__file__).resolve().parents[2])) / 'robot_vision'
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'yolo_mango')]
 import mango_vision_node as vision_node
 from decision import Fruit
@@ -58,6 +59,7 @@ class FrameHarness:
         self.holding_since_ns = 0
         self.snapshot = None
         self.next_track_id = self.frame = self.error_count = 0
+        self.errors = []
         for name in ('target_pub', 'scene_pub', 'harvest_pub', 'observation_pub'):
             setattr(self, name, Publisher())
 
@@ -65,19 +67,20 @@ class FrameHarness:
         return SimpleNamespace(now=lambda: Time(nanoseconds=int(self.seconds * 1e9)))
 
     def get_logger(self):
-        return SimpleNamespace(info=lambda _: None, error=lambda _: None)
+        return SimpleNamespace(info=lambda _: None, error=self.errors.append)
 
-    def state(self, state=VisionStopState.HOLDING, stage=4):
+    def state(self, state=VisionStopState.HOLDING, stage=4, stop_id=0):
         message = VisionStopState()
         message.header.stamp = self.get_clock().now().to_msg()
         message.state, message.stage_id = state, stage
+        message.stop_id = stop_id
         self.on_stop_state(message)
 
 
 @pytest.fixture
 def frames(monkeypatch):
     harness = FrameHarness()
-    fruits = [Fruit(i + 1, color, x, y, h, .95, .5,
+    fruits = [Fruit(i + 1, color, x, y, float(h), .95, .5,
                     surface_xyz_m=[x / 1000, y / 1000, .5],
                     width_px=40., width_m=.04, height_m=.08)
               for i, (color, x, y, h) in enumerate([
@@ -90,6 +93,24 @@ def frames(monkeypatch):
     return harness
 
 
+@pytest.mark.parametrize('stage', [4, 6, 8, 10, 12, 14])
+def test_new_parking_session_replaces_previous_snapshot_in_same_route_step(frames, stage):
+    frames.state(stage=stage, stop_id=1001)
+    for _ in range(3):
+        frames.process_frame()
+    assert frames.snapshot.stop_id == 1001
+    first_ids = {target.track_id for target in frames.snapshot.targets}
+    frames.seconds += .1
+    frames.state(stage=stage, stop_id=1002)
+    assert frames.snapshot is None
+    for _ in range(2):
+        frames.process_frame()
+        assert not frames.harvest_pub.messages[-1].valid
+    frames.process_frame()
+    assert frames.snapshot.stop_id == 1002
+    assert first_ids.isdisjoint({target.track_id for target in frames.snapshot.targets})
+
+
 def test_only_fresh_frames_after_hold_form_one_frozen_multi_target_snapshot(frames):
     for _ in range(4):
         frames.process_frame()
@@ -100,7 +121,7 @@ def test_only_fresh_frames_after_hold_form_one_frozen_multi_target_snapshot(fram
         assert not frames.harvest_pub.messages[-1].valid
     frames.process_frame()
     snapshot = frames.harvest_pub.messages[-1]
-    assert snapshot.valid and snapshot.stage_id == 4 and len(snapshot.targets) == 3
+    assert snapshot.valid and snapshot.stage_id == 4 and len(snapshot.targets) == 3, frames.errors
     assert len({t.track_id for t in snapshot.targets}) == 3
     assert any(t.is_small and t.is_green for t in snapshot.targets)
     frames.seconds += .1
@@ -113,7 +134,7 @@ def test_stale_or_revoked_hold_discards_snapshot_and_requires_new_frames(frames)
     frames.state()
     for _ in range(3):
         frames.process_frame()
-    assert frames.snapshot is not None
+    assert frames.snapshot is not None, frames.errors
     frames.seconds += .7
     frames.process_frame()
     assert frames.snapshot is None and not frames.harvest_pub.messages[-1].valid
@@ -129,7 +150,7 @@ def test_depth_change_validates_atomically_and_invalidates_old_selection(frames)
     frames.state()
     for _ in range(3):
         frames.process_frame()
-    assert frames.snapshot is not None
+    assert frames.snapshot is not None, frames.errors
     result = frames.on_parameters([Parameter('harvest_min_depth_m', value=.7)])
     assert not result.successful and frames.settings['harvest_min_depth_m'] == .4
     result = frames.on_parameters([Parameter('harvest_min_depth_m', value=.51)])

@@ -35,11 +35,16 @@ def generate_launch_description():
                 "params_file", default_value=default_driver_params
             ),
             DeclareLaunchArgument("allow_motion", default_value="false"),
+            DeclareLaunchArgument(
+                "ik_solver", default_value="analytic", choices=["analytic", "numerical"],
+                description="Solver for the legacy/direct IK backend",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(legacy_launch),
                 launch_arguments={
                     "params_file": params_file,
                     "allow_motion": allow_motion,
+                    "ik_solver": LaunchConfiguration("ik_solver"),
                 }.items(),
                 condition=IfCondition(
                     PythonExpression(["'", backend, "' == 'legacy'"])

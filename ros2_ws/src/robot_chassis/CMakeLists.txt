@@ -46,11 +46,17 @@ install(TARGETS
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  add_executable(test_yaw_increment_filter test/test_yaw_increment_filter.cpp)
+  target_include_directories(test_yaw_increment_filter PRIVATE include)
+  add_test(NAME yaw_increment_filter COMMAND test_yaw_increment_filter)
   add_executable(test_vision_stop_controller test/test_vision_stop_controller.cpp)
   target_include_directories(test_vision_stop_controller PRIVATE include)
   add_test(NAME vision_stop_controller COMMAND test_vision_stop_controller)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(photoelectric_integration test/test_photoelectric.py TIMEOUT 180)
+  ament_add_pytest_test(yaw_feedback test/test_yaw_feedback.py TIMEOUT 45
+    APPEND_ENV MANGO_TEST_BASE_SERIAL=$<TARGET_FILE:base_serial_node>)
+  ament_add_pytest_test(photoelectric_integration test/test_photoelectric.py TIMEOUT 180
+    APPEND_ENV MANGO_TEST_CHASSIS_BIN_DIR=$<TARGET_FILE_DIR:row_navigation_node>)
 endif()
 
 ament_package()

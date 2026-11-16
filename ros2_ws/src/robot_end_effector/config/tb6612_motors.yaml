@@ -1,0 +1,23 @@
+pwm_motor_node:
+  ros__parameters:
+    driver_type: tb6612
+    standby_pin: 7
+    pwm_frequency_hz: 20000
+    left.pwm_pin: 32
+    left.in1_pin: 11
+    left.in2_pin: 13
+    left.direction: 1
+    right.pwm_pin: 33
+    right.in1_pin: 16
+    right.in2_pin: 18
+    right.direction: 1
+    max_duration_s: 30.0
+    enable_encoders: true
+    left.encoder_a_pin: 12
+    left.encoder_b_pin: 29
+    left.encoder_direction_sign: 1
+    left.counts_per_output_rev: 413.0
+    right.encoder_a_pin: 31
+    right.encoder_b_pin: 15
+    right.encoder_direction_sign: 1
+    right.counts_per_output_rev: 413.0

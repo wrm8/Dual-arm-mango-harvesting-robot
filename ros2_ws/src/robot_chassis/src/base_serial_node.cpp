@@ -48,10 +48,6 @@ double clamp(const double value, const double lower, const double upper)
   return std::max(lower, std::min(value, upper));
 }
 
-double normalize_angle(const double angle)
-{
-  return std::atan2(std::sin(angle), std::cos(angle));
-}
 }  // namespace
 
 BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
@@ -69,6 +65,8 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   declare_parameter("encoder_counts_per_wheel_rev", 1560.0);
   declare_parameter("max_wheel_speed_mps", 1.0);
   declare_parameter("feedback_timeout_s", 0.3);
+  declare_parameter("imu_yaw_increment_deadband_rad", 0.0001);
+  declare_parameter("imu_yaw_increment_deadband_startup_delay_s", 5.0);
   declare_parameter("wheel_sign_a", 1);
   declare_parameter("wheel_sign_b", 1);
   declare_parameter("wheel_sign_c", 1);
@@ -87,6 +85,21 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
   encoder_counts_per_wheel_rev_ = get_parameter("encoder_counts_per_wheel_rev").as_double();
   max_wheel_speed_mps_ = get_parameter("max_wheel_speed_mps").as_double();
   feedback_timeout_s_ = get_parameter("feedback_timeout_s").as_double();
+  const auto yaw_deadband = get_parameter("imu_yaw_increment_deadband_rad").as_double();
+  const auto yaw_deadband_startup_delay_s =
+    get_parameter("imu_yaw_increment_deadband_startup_delay_s").as_double();
+  yaw_filter_.set_threshold(yaw_deadband);
+  if (!finite(yaw_deadband_startup_delay_s) || yaw_deadband_startup_delay_s < 0.0)
+  {
+    throw std::invalid_argument(
+            "imu_yaw_increment_deadband_startup_delay_s must be finite and non-negative");
+  }
+  yaw_deadband_rad_ = yaw_deadband;
+  yaw_filter_startup_delay_s_ = yaw_deadband_startup_delay_s;
+  yaw_filter_enable_time_ = std::chrono::steady_clock::now() +
+    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(yaw_filter_startup_delay_s_));
+  yaw_filter_.set_threshold(0.0);
   wheel_sign_ = {
     static_cast<double>(get_parameter("wheel_sign_a").as_int()),
     static_cast<double>(get_parameter("wheel_sign_b").as_int()),
@@ -149,6 +162,9 @@ BaseSerialNode::BaseSerialNode() : Node("base_serial_node")
     get_logger(), "base serial ready; motion=%s, stage protocol=%s",
     allow_motion_ ? "enabled" : "disabled",
     stage_protocol_enabled_ ? "enabled" : "disabled");
+  RCLCPP_INFO(
+    get_logger(), "IMU yaw deadband %.6f rad/frame will activate after %.2f s",
+    yaw_deadband, yaw_deadband_startup_delay_s);
 }
 
 BaseSerialNode::~BaseSerialNode()
@@ -417,6 +433,35 @@ void BaseSerialNode::read_loop()
   }
 }
 
+YawIncrementFilter::Sample BaseSerialNode::update_yaw(const double raw_yaw)
+{
+  const auto now = std::chrono::steady_clock::now();
+  if (have_yaw_feedback_ &&
+      std::chrono::duration<double>(now - last_yaw_feedback_time_).count() > feedback_timeout_s_)
+  {
+    yaw_filter_.set_raw_reference(raw_yaw);
+    yaw_filter_.set_threshold(0.0);
+    yaw_filter_enabled_ = false;
+    yaw_filter_enable_time_ = now +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(yaw_filter_startup_delay_s_));
+    RCLCPP_INFO(
+      get_logger(), "Yaw feedback resumed after a gap; deadband will activate after %.2f s",
+      yaw_filter_startup_delay_s_);
+  }
+  if (!yaw_filter_enabled_ && now >= yaw_filter_enable_time_)
+  {
+    yaw_filter_.set_threshold(yaw_deadband_rad_);
+    yaw_filter_enabled_ = true;
+    RCLCPP_INFO(
+      get_logger(), "IMU yaw increment deadband enabled: %.6f rad per feedback frame",
+      yaw_deadband_rad_);
+  }
+  have_yaw_feedback_ = true;
+  last_yaw_feedback_time_ = now;
+  return yaw_filter_.update(raw_yaw);
+}
+
 void BaseSerialNode::parse_line(const std::string &line)
 {
   std::istringstream stream(line);
@@ -474,17 +519,17 @@ void BaseSerialNode::parse_line(const std::string &line)
       wheel_speed_mps_[i] = distance_m / period_s;
     }
 
-    const auto yaw = yaw_mdeg * kPi / 180000.0;
+    const auto filtered = update_yaw(yaw_mdeg * kPi / 180000.0);
+    const auto yaw = filtered.yaw;
     if (have_previous_yaw_)
     {
-      wz_rad_s_ = normalize_angle(yaw - previous_yaw_rad_) / period_s;
+      wz_rad_s_ = filtered.delta / period_s;
     }
     else
     {
       wz_rad_s_ = 0.0;
       have_previous_yaw_ = true;
     }
-    previous_yaw_rad_ = yaw;
     yaw_rad_ = yaw;
     gyro_z_rad_s_ = wz_rad_s_;
 
@@ -515,8 +560,10 @@ void BaseSerialNode::parse_line(const std::string &line)
     if (stream >> yaw >> gyro_z && finite(yaw) && finite(gyro_z))
     {
       std::scoped_lock lock(state_mutex_);
-      yaw_rad_ = yaw;
-      gyro_z_rad_s_ = gyro_z;
+      const auto filtered = update_yaw(yaw);
+      yaw_rad_ = filtered.yaw;
+      gyro_z_rad_s_ = filtered.suppressed ? 0.0 : gyro_z;
+      wz_rad_s_ = gyro_z_rad_s_;
       have_imu_ = true;
     }
     return;
@@ -536,10 +583,12 @@ void BaseSerialNode::parse_line(const std::string &line)
       std::scoped_lock lock(state_mutex_);
       x_m_ = x;
       y_m_ = y;
-      yaw_rad_ = yaw;
+      const auto filtered = update_yaw(yaw);
+      yaw_rad_ = filtered.yaw;
       vx_mps_ = vx;
       vy_mps_ = vy;
-      wz_rad_s_ = wz;
+      wz_rad_s_ = filtered.suppressed ? 0.0 : wz;
+      gyro_z_rad_s_ = wz_rad_s_;
       have_odom_ = true;
     }
   }

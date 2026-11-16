@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>采摘机器人 · 数据监测</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script></head>
+<body>
+<header><div><span class="eyebrow">ROBOT TELEMETRY / READ ONLY</span><h1>采摘机器人 · 数据监测</h1></div><div id="connection" class="pill">连接中</div></header>
+<main>
+<div id="banner" class="notice">等待数据。此页面仅订阅话题，不发送运动指令。</div>
+<div id="faults" class="error"></div>
+<section class="metrics"><article><label>当前路线段</label><strong id="stage">—</strong><small id="commandSource">等待指令</small></article><article><label>航向 yaw</label><strong id="yaw">—</strong><small id="vel">等待反馈</small></article><article><label>轮速反馈</label><strong id="feedback">—</strong><small>起转估计受反馈周期限制</small></article><article><label>底盘状态</label><strong id="baseStatus">—</strong><small id="baseAge">等待反馈</small></article></section>
+<section class="panel"><div class="heading"><h2>四轮速度与起步</h2><span>单位 m/s · 实线实测，虚线换算目标</span></div><div id="wheels" class="wheels"></div><canvas id="speedChart" aria-label="四轮速度趋势"></canvas><p id="geometry" class="muted"></p><p class="muted">目标由上位机 Twist 与底盘尺寸换算，不是 STM32 实际 PWM、PI 输出或电流。无反馈不能判断轮子是否真的起转。</p></section>
+<section class="panel"><div class="heading"><h2>起步事件</h2><button id="export">导出事件 CSV</button></div><p id="active">等待从静止开始的运动。先打开监测，再运行你的任务。</p><div class="scroll"><table><thead><tr><th>事件 / 段</th><th>判断</th><th>A 左后</th><th>B 左前</th><th>C 右前</th><th>D 右后</th><th>时间差</th><th>偏航变化</th><th>说明</th></tr></thead><tbody id="events"></tbody></table></div><p id="thresholds" class="muted"></p></section>
+<div class="columns"><section class="panel"><h2>航向趋势</h2><canvas id="yawChart" aria-label="航向角趋势"></canvas><p class="muted">单位 °；这里只显示反馈，不改变航向参考或控制参数。</p></section><section class="panel"><h2>超声波</h2><div id="ultrasound"></div><p class="muted">数值与 valid 按原消息显示；收到 2 m 不等于障碍物恰好在 2 m，超量程含义以传感器节点为准。</p></section></div>
+<div class="columns"><section class="panel"><h2>视觉 / 停车 / 目标果实</h2><div id="vision"></div></section><section class="panel"><h2>节点告警</h2><div id="logs" class="logs"></div></section></div>
+<section class="panel"><div class="heading"><h2>话题健康与原始数据</h2><input id="filter" placeholder="筛选话题，例如 wheel / vision" aria-label="筛选话题"></div><p class="muted">频率是最近 5 秒内本机收到消息的估计值；与传感器真实采样频率可能不同。点击展开完整消息。</p><div id="topics"></div></section>
+<section class="panel"><h2>记录与 ROS 节点</h2><p id="recording"></p><p id="nodes" class="muted"></p><details><summary>发现的全部话题（只自动订阅预设话题及 --topic 指定的话题）</summary><pre id="graph"></pre></details></section>
+</main><footer>监测工具不能代替急停。无自动启动、复位或驾驶功能。</footer>
+</body></html>

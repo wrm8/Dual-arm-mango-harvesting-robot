@@ -1,0 +1,27 @@
+pwm_motor_node:
+  ros__parameters:
+    # AT8236 V2: IN1=PWM, IN2=LOW. Physical 40-pin header BOARD numbering.
+    # External 12 V to VIN, common GND; hardware PWM pinmux required.
+    driver_type: at8236
+    pwm_frequency_hz: 20000
+    left.pwm_pin: 32
+    left.low_pin: 11
+    right.pwm_pin: 33
+    right.low_pin: 16
+    # Max allowed duration for any single action (not the normal run duration).
+    max_duration_s: 30.0
+    enable_encoders: true
+    # A rising edges only (1x), at the OUTPUT shaft. Zero means uncalibrated.
+    left.encoder_a_pin: 12
+    left.encoder_b_pin: 29
+    left.encoder_direction_sign: 1
+    left.counts_per_output_rev: 413.0
+    right.encoder_a_pin: 31
+    right.encoder_b_pin: 15
+    right.encoder_direction_sign: 1
+    right.counts_per_output_rev: 413.0
+    encoder_slowdown_revolutions: 0.5
+    encoder_minimum_duty: 0.15
+    encoder_tolerance_ticks: 2
+    encoder_settle_s: 0.15
+    encoder_no_pulse_timeout_s: 2.0

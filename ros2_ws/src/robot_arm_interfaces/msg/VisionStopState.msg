@@ -12,3 +12,6 @@ float64 tree_error_m
 string message
 # Image-space centering error, positive image-right; not meters.
 float64 tree_center_error_ratio
+# Unique parking session, preserved across transient SETTLING/HOLDING changes.
+# Zero is reserved for legacy/manual parking and cannot auto-resume navigation.
+uint64 stop_id

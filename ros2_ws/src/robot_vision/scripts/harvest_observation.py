@@ -61,3 +61,35 @@ def selected_targets(result, fruits, matrix, min_confidence):
                         'height_px': f.height_px, 'width_m': f.width_m,
                         'height_m': f.height_m})
     return sorted(targets, key=lambda target: target['slot'])
+
+
+def selected_camera_targets(result, fruits, min_confidence):
+    """Return the frozen selections in camera_color_optical_frame coordinates."""
+    if result.get('status') != 'confirmed':
+        return None
+    by_id = {f.id: f for f in fruits}
+    slots = {fruit_id: slot for slot, fruit_id in result.get('slots', {}).items()}
+    targets = []
+    seen = set()
+    for selected in result.get('targets', []):
+        fid = selected['id']
+        if fid in seen:
+            continue
+        seen.add(fid)
+        f = by_id.get(fid)
+        if f is None:
+            return None
+        values = [f.confidence, f.depth_m, f.width_px, f.height_px, f.width_m, f.height_m]
+        if (any(v is None or not math.isfinite(v) for v in values) or
+                not min_confidence <= f.confidence <= 1 or
+                f.surface_xyz_m is None or len(f.surface_xyz_m) != 3 or
+                not all(math.isfinite(v) for v in f.surface_xyz_m) or fid not in slots):
+            return None
+        targets.append({'slot': slots[fid], 'color': f.color,
+                        'is_green': f.color == 'green_mango',
+                        'is_small': 'small' in selected['reasons'],
+                        'point': list(f.surface_xyz_m), 'confidence': f.confidence,
+                        'depth_m': f.depth_m, 'width_px': f.width_px,
+                        'height_px': f.height_px, 'width_m': f.width_m,
+                        'height_m': f.height_m})
+    return sorted(targets, key=lambda target: target['slot'])

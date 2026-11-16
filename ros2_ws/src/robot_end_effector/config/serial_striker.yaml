@@ -1,0 +1,17 @@
+serial_striker_node:
+  ros__parameters:
+    dry_run: true
+    allow_motion: false
+    # Use distinct persistent aliases (or /dev/serial/by-path/...) for the two STM32s.
+    serial_device: /dev/stm32_striker
+    chassis_serial_device: /dev/stm32_chassis
+    baud_rate: 115200  # Protocol v1: 115200, 8N1, no flow control.
+    write_timeout_s: 0.5
+    max_wait_s: 30.0
+    # Fixed 6-byte binary frame: AA 55 | command 01 | arm mask | 0D 0A.
+    # Mask 01=left, 02=right, 03=both. One complete frame triggers ONE strike.
+    # No checksum/ACK. STM32 handles the 10 revolutions and stops independently.
+    # These quoted hex strings are converted to raw bytes, not sent as ASCII text.
+    left_command_hex: "AA 55 01 01 0D 0A"
+    right_command_hex: "AA 55 01 02 0D 0A"
+    both_command_hex: "AA 55 01 03 0D 0A"

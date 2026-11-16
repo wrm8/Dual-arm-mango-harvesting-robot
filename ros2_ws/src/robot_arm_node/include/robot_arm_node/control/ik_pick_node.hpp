@@ -60,6 +60,9 @@ private:
 
     std::string base_link_;
     std::string tip_link_;
+    std::string ik_solver_;
+    std::vector<double> ik_lower_limits_;
+    std::vector<double> ik_upper_limits_;
     double pitch_rad_{};
     double roll_rad_{};
 

@@ -16,6 +16,14 @@ IkPickNode::IkPickNode(
     // 1. 读取参数
     base_link_ = declare_parameter("base_link", "base_link");
     tip_link_ = declare_parameter("tip_link", "tcp_link");
+    ik_solver_ = declare_parameter<std::string>("ik_solver", "analytic");
+    if (ik_solver_ != "analytic" && ik_solver_ != "numerical") {
+        throw std::invalid_argument("ik_solver must be analytic or numerical");
+    }
+    ik_lower_limits_ = declare_parameter<std::vector<double>>(
+        "ik_lower_limits", std::vector<double>{});
+    ik_upper_limits_ = declare_parameter<std::vector<double>>(
+        "ik_upper_limits", std::vector<double>{});
     // 默认 pitch 给 1.5708（约 90度），表示水平向前抓
     pitch_rad_ = declare_parameter("pitch", 1.5708);
     roll_rad_ = declare_parameter("roll", 0.0);
@@ -59,7 +67,10 @@ void IkPickNode::robot_description_callback(const std_msgs::msg::String::SharedP
     try {
         // 实例化你写的运动学库
         kinematics_ = std::make_unique<robot_arm_node::motion::UrdfKinematics>(
-            message->data, base_link_, tip_link_);
+            message->data, base_link_, tip_link_, 200U, 1e-3,
+            ik_lower_limits_, ik_upper_limits_);
+        RCLCPP_INFO(get_logger(), "IK solver=%s; calibrated limits=%s",
+            ik_solver_.c_str(), ik_lower_limits_.empty() ? "URDF only" : "enabled");
         
         RCLCPP_INFO(get_logger(), "✅ URDF 解析成功！运动学引擎已就绪。");
     } catch (const std::exception &e) {
@@ -175,12 +186,20 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
 
     const char *ik_stage = "pregrasp";
     try {
+        const auto solve_ik = [&](const std::vector<double> &initial,
+                                  double px, double py, double pz, double tilt, double joint5) {
+            if (ik_solver_ == "analytic") {
+                return kinematics_->inverse_xyz_tilt_joint5_analytic(
+                    initial, px, py, pz, tilt, joint5);
+            }
+            return kinematics_->inverse_xyz_tilt_joint5(initial, px, py, pz, tilt, joint5);
+        };
         // Solve approach, grasp, and lift poses with continuous seeds.
         ik_stage = "pregrasp";
-        auto q_pregrasp = kinematics_->inverse_xyz_tilt_joint5(
+        auto q_pregrasp = solve_ik(
             seed, target_x, target_y, target_z + approach_h, target_pitch, target_roll);
         ik_stage = "grasp";
-        auto q_grasp = kinematics_->inverse_xyz_tilt_joint5(
+        auto q_grasp = solve_ik(
             q_pregrasp, target_x, target_y, target_z, target_pitch, target_roll);
 
         const auto log_solution = [this](const char * stage, const std::vector<double> & joints) {
@@ -189,11 +208,15 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
             double actual_pitch = 0.0;
             double actual_yaw = 0.0;
             frame.M.GetRPY(actual_roll, actual_pitch, actual_yaw);
+            const auto tool_z = frame.M.UnitZ();
+            const double actual_tool_tilt = std::atan2(
+                tool_z.z(), std::hypot(tool_z.x(), tool_z.y()));
             RCLCPP_INFO(
                 get_logger(),
-                "%s q=[%.4f, %.4f, %.4f, %.4f, %.4f], FK xyz=(%.4f, %.4f, %.4f), RPY=(roll %.4f, pitch %.4f, yaw %.4f)",
+                "%s q=[%.4f, %.4f, %.4f, %.4f, %.4f], FK xyz=(%.4f, %.4f, %.4f), tool_tilt=%.4f, RPY=(roll %.4f, pitch %.4f, yaw %.4f)",
                 stage, joints[0], joints[1], joints[2], joints[3], joints[4],
-                frame.p.x(), frame.p.y(), frame.p.z(), actual_roll, actual_pitch, actual_yaw);
+                frame.p.x(), frame.p.y(), frame.p.z(), actual_tool_tilt,
+                actual_roll, actual_pitch, actual_yaw);
 
             const auto & lower = kinematics_->lower_limits();
             const auto & upper = kinematics_->upper_limits();
@@ -211,7 +234,7 @@ void IkPickNode::execute_pick(const std::shared_ptr<PickGoalHandle> goal_handle)
         
         // Lift back above the target after reaching the grasp pose.
         ik_stage = "lift";
-        auto q_lift = kinematics_->inverse_xyz_tilt_joint5(
+        auto q_lift = solve_ik(
             q_grasp, target_x, target_y, target_z + approach_h, target_pitch, target_roll);
 
         log_solution("lift", q_lift);

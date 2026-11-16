@@ -1,0 +1,22 @@
+robot_arm_driver:
+  ros__parameters:
+    serial_device: /dev/robot_arm
+    baud_rate: 115200
+    joint_names: [left_joint1, left_joint2, left_joint3, left_joint4, left_joint5, left_gripper, right_joint1, right_joint2, right_joint3, right_joint4, right_joint5, right_gripper]
+    servo_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    servo_protocols: [hx, hx, hx, hx, v3, v3, hx, hx, hx, hx, v3, v3]
+    # Left values copy the measured single-arm config. Right values remain provisional until measured.
+    zero_ticks: [1908.0, 2012.0, 1650.0, 1491.0, 518.0, 760.0, 1908.0, 2012.0, 1650.0, 1491.0, 518.0, 760.0]
+    urdf_zero_ticks: [1887.0, 2384.0, 3602.0, 1889.0, 518.0, 760.0, 1887.0, 2384.0, 3602.0, 1889.0, 518.0, 760.0]
+    ticks_per_radian: [651.8986, 651.8986, 651.8986, 651.8986, 238.7324, 238.7324, 651.8986, 651.8986, 651.8986, 651.8986, 238.7324, 238.7324]
+    directions: [1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0]
+    min_ticks: [1470, 1430, 1640, 840, 135, 195, 1470, 1430, 1640, 840, 135, 195]
+    max_ticks: [2380, 3500, 3650, 3640, 890, 760, 2380, 3500, 3650, 3640, 890, 760]
+    goal_speed: 100
+    goal_acceleration: 0
+    position_tolerance_ticks: 20
+    feedback_poll_period_ms: 200
+    feedback_timeout_ms: 50
+    allow_motion: false
+    # This only takes effect when allow_motion is true.
+    enable_torque_on_start: true

@@ -340,6 +340,6 @@
   <joint name="joint_tcp" type="fixed">
     <parent link="link5" />
     <child link="tcp_link" />
-    <origin xyz="0 0 0.05" rpy="0 0 0" />
+    <origin xyz="0 0 0.10" rpy="0 0 0" />
   </joint>
 </robot>

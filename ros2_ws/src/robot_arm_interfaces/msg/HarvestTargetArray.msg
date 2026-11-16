@@ -4,3 +4,5 @@ uint8 stage_id
 # An empty valid array means four fruits were evaluated and none selected.
 bool valid
 HarvestTarget[] targets
+# Copied from VisionStopState, so repeated trees in one route stage are distinct.
+uint64 stop_id

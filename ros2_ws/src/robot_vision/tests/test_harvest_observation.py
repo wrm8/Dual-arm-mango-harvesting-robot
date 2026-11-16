@@ -7,7 +7,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'yolo_mango')]
 from decision import Fruit, decide
-from harvest_observation import fruits_in_depth, selected_targets, tree_observation
+from harvest_observation import fruits_in_depth, selected_targets, selected_camera_targets, tree_observation
 
 
 class HarvestObservationTests(unittest.TestCase):
@@ -42,6 +42,15 @@ class HarvestObservationTests(unittest.TestCase):
         self.assertEqual(small_green['height_m'], .08)
         self.fruits[1].surface_xyz_m = None
         self.assertIsNone(selected_targets(result, self.fruits, matrix, .75))
+
+    def test_dual_arm_snapshot_keeps_camera_coordinates_and_slot(self):
+        result = decide(self.fruits, 640, self.cfg)
+        targets = selected_camera_targets(result, self.fruits, .75)
+        self.assertGreater(len(targets), 0)
+        self.assertEqual(targets[0]['slot'].split('_')[0], 'left')
+        self.assertEqual(targets[0]['point'], [.1, 0, .5])
+        self.fruits[1].surface_xyz_m = None
+        self.assertIsNone(selected_camera_targets(result, self.fruits, .75))
 
     def test_equal_yellow_four_has_valid_empty_selection(self):
         for f in self.fruits:

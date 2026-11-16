@@ -1,0 +1,14 @@
+{
+  "source_frame": "camera_color_optical_frame",
+  "left": {
+    "target_frame": "left_base_link",
+    "calibrated": true,
+    "camera_to_base": [[0,0,1,-0.17],[0,1,0,-0.07],[-1,0,0,0.325],[0,0,0,1]]
+  },
+  "right": {
+    "target_frame": "right_base_link",
+    "calibrated": true,
+    "camera_to_base": [[0,0,1,-0.17],[0,1,0,0.07],[-1,0,0,0.325],[0,0,0,1]]
+  },
+  "note": "Placeholder optical-axis orientation only; measure both translations and rotations before enabling motion."
+}

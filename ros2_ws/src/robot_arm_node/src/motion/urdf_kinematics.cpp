@@ -13,11 +13,32 @@
 #include <utility>
 #include <Eigen/Dense>
 #include <algorithm>
+#include <array>
 namespace robot_arm_node::motion
 {
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
+
+// Retry non-convergence only. Invalid inputs and FK/numerical failures must
+// propagate immediately instead of being hidden by another initial guess.
+class IkConvergenceError : public std::runtime_error
+{
+public:
+  using std::runtime_error::runtime_error;
+};
+
+double radical_inverse(unsigned int index, const unsigned int base)
+{
+  double value = 0.0;
+  double weight = 1.0;
+  while (index != 0U) {
+    weight /= static_cast<double>(base);
+    value += weight * static_cast<double>(index % base);
+    index /= base;
+  }
+  return value;
+}
 
 // 统一角度到[-180°，180°]
 double wrap_angle(double angle)
@@ -70,7 +91,9 @@ UrdfKinematics::UrdfKinematics(
   const std::string &base_link,
   const std::string &tip_link,
   const unsigned int max_iterations,
-  const double tolerance) :max_iterations_(max_iterations), tolerance_(tolerance)
+  const double tolerance,
+  const std::vector<double> &lower_limits,
+  const std::vector<double> &upper_limits) :max_iterations_(max_iterations), tolerance_(tolerance)
 {
   if (robot_description.empty()) {
     throw std::invalid_argument("robot_description is empty");
@@ -103,6 +126,10 @@ UrdfKinematics::UrdfKinematics(
   
   lower_limits_ = KDL::JntArray(joint_count);
   upper_limits_ = KDL::JntArray(joint_count);
+  if ((!lower_limits.empty() || !upper_limits.empty()) &&
+      (lower_limits.size() != joint_count || upper_limits.size() != joint_count)) {
+    throw std::invalid_argument("IK limit overrides must contain one lower/upper value per joint");
+  }
 
   unsigned int index = 0U;
   for (unsigned int segment_index = 0U;
@@ -120,6 +147,13 @@ UrdfKinematics::UrdfKinematics(
     if (urdf_joint && urdf_joint->type != urdf::Joint::CONTINUOUS && urdf_joint->limits) {
       lower = urdf_joint->limits->lower;
       upper = urdf_joint->limits->upper;
+    }
+    if (!lower_limits.empty()) {
+      if (!std::isfinite(lower_limits[index]) || !std::isfinite(upper_limits[index])) {
+        throw std::invalid_argument("IK limit overrides contain non-finite values");
+      }
+      lower = std::max(lower, lower_limits[index]);
+      upper = std::min(upper, upper_limits[index]);
     }
     if (!std::isfinite(lower) || !std::isfinite(upper) || lower >= upper) {
       throw std::runtime_error("invalid limits for joint " + joint.getName());
@@ -294,6 +328,104 @@ std::vector<double> UrdfKinematics::inverse_xyz_tilt_joint5(
   const double target_y,
   const double target_z,
   const double target_tool_tilt,
+  const double target_joint5,
+  const unsigned int max_attempts) const
+{
+  if (max_attempts == 0U || max_attempts > 64U) {
+    throw std::invalid_argument("IK max_attempts must be within [1, 64]");
+  }
+
+  std::string first_error;
+  try {
+    // Preserve the fast path and continuity when the current/previous pose works.
+    return inverse_xyz_tilt_joint5_single_seed(
+      seed, target_x, target_y, target_z, target_tool_tilt, target_joint5);
+  } catch (const IkConvergenceError &error) {
+    first_error = error.what();
+  }
+
+  std::vector<std::vector<double>> initial_seeds;
+  initial_seeds.reserve(max_attempts);
+  const auto add_seed = [&](std::vector<double> candidate) {
+    if (initial_seeds.size() >= max_attempts) {
+      return;
+    }
+    for (std::size_t j = 0U; j < 4U; ++j) {
+      candidate[j] = std::clamp(candidate[j], lower_limits_values_[j], upper_limits_values_[j]);
+    }
+    candidate[4] = target_joint5;
+    if (std::find(initial_seeds.begin(), initial_seeds.end(), candidate) == initial_seeds.end()) {
+      initial_seeds.push_back(std::move(candidate));
+    }
+  };
+  add_seed(seed);  // Already attempted above; also the basis for fallback seeds.
+  const double azimuth = std::hypot(target_x, target_y) > 1e-9 ?
+    std::atan2(target_y, target_x) : initial_seeds.front()[0];
+
+  // Bent reference guesses escape the straight zero pose; opposite bends cover
+  // alternative branches. They are not additional physical trajectory points.
+  for (const auto &bend : std::array<std::array<double, 3>, 4>{{
+      {{0.5, 1.5, 0.5}}, {{0.5, -1.5, 0.5}},
+      {{-0.5, 1.5, -0.5}}, {{-0.5, -1.5, -0.5}}}}) {
+    add_seed({azimuth, bend[0], bend[1], bend[2], target_joint5});
+  }
+  std::vector<double> middle(5U, target_joint5);
+  for (std::size_t j = 0U; j < 4U; ++j) {
+    middle[j] = 0.5 * lower_limits_values_[j] + 0.5 * upper_limits_values_[j];
+  }
+  add_seed(middle);
+
+  // Fill remaining guesses using a deterministic low-discrepancy sequence.
+  // Bound generation as well as solving, including nearly zero-width limits.
+  constexpr std::array<unsigned int, 4> bases{{2U, 3U, 5U, 7U}};
+  for (unsigned int index = 1U;
+       initial_seeds.size() < max_attempts && index <= 16U * max_attempts; ++index) {
+    std::vector<double> candidate(5U, target_joint5);
+    for (std::size_t j = 0U; j < 4U; ++j) {
+      const double fraction = radical_inverse(index, bases[j]);
+      candidate[j] = (1.0 - fraction) * lower_limits_values_[j] +
+        fraction * upper_limits_values_[j];
+    }
+    add_seed(std::move(candidate));
+  }
+
+  std::vector<double> best_solution;
+  double best_distance = std::numeric_limits<double>::infinity();
+  std::string last_error = first_error;
+  for (std::size_t attempt = 1U; attempt < initial_seeds.size(); ++attempt) {
+    try {
+      auto solution = inverse_xyz_tilt_joint5_single_seed(
+        initial_seeds[attempt], target_x, target_y, target_z, target_tool_tilt, target_joint5);
+      double distance = 0.0;
+      for (std::size_t j = 0U; j < 4U; ++j) {
+        const double difference = solution[j] - seed[j];
+        distance += difference * difference;
+      }
+      if (best_solution.empty() || distance < best_distance) {
+        best_distance = distance;
+        best_solution = std::move(solution);
+      }
+    } catch (const IkConvergenceError &error) {
+      last_error = error.what();
+    }
+  }
+  if (!best_solution.empty()) {
+    return best_solution;
+  }
+
+  std::ostringstream message;
+  message << "xyz + tool tilt IK failed for all " << initial_seeds.size()
+          << " initial seeds (up to " << max_iterations_ << " updates per seed); "
+          << "first seed: " << first_error << "; last seed: " << last_error;
+  throw std::runtime_error(message.str());
+}
+
+std::vector<double> UrdfKinematics::inverse_xyz_tilt_joint5_single_seed(
+  const std::vector<double> &seed,
+  const double target_x,
+  const double target_y,
+  const double target_z,
+  const double target_tool_tilt,
   const double target_joint5) const
 {
   using Error = Eigen::Matrix<double, 4, 1>;
@@ -434,7 +566,7 @@ std::vector<double> UrdfKinematics::inverse_xyz_tilt_joint5(
           << " updates (" << reason << "); residual position="
           << final_error.head<3>().norm() << " m, tool_tilt="
           << final_error(3) << " rad, fixed joint5=" << q(4) << " rad";
-  throw std::runtime_error(message.str());
+  throw IkConvergenceError(message.str());
 }
 
 

@@ -16,6 +16,7 @@ find_package(control_msgs REQUIRED)
 find_package(robot_arm_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(kdl_parser REQUIRED)
 find_package(urdf REQUIRED)
 find_package(orocos_kdl REQUIRED)
@@ -28,6 +29,7 @@ add_library(robot_arm_motion
   src/motion/joint_limits.cpp
   src/motion/kinematics.cpp
   src/motion/urdf_kinematics.cpp
+  src/motion/analytic_ik.cpp
   src/motion/planning.cpp
   src/motion/trajectory.cpp
 )
@@ -69,20 +71,42 @@ ament_target_dependencies(ik_pick_node
   robot_arm_interfaces
 )
 
+add_executable(dual_arm_harvest_node src/control/dual_arm_harvest_node.cpp)
+target_link_libraries(dual_arm_harvest_node robot_arm_motion)
+ament_target_dependencies(dual_arm_harvest_node
+  rclcpp rclcpp_action robot_arm_interfaces sensor_msgs std_msgs geometry_msgs
+)
+
 # 5. 统一安装规则（非常关键，决定了 ros2 run 能不能找到）
 install(TARGETS 
   robot_arm_motion 
   pick_sequence_node 
   ik_pick_node
+  dual_arm_harvest_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
 
 # 6. 测试（如果有的话）
 if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_dual_arm_grasp_profiles
+    test/test_dual_arm_grasp_profiles.py TIMEOUT 90
+    ENV MANGO_TEST_COORDINATOR=$<TARGET_FILE:dual_arm_harvest_node>
+  )
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_motion test/test_motion.cpp)
   target_link_libraries(test_motion robot_arm_motion)
+  ament_add_gtest(test_urdf_kinematics test/test_urdf_kinematics.cpp)
+  target_link_libraries(test_urdf_kinematics robot_arm_motion)
+  target_compile_definitions(test_urdf_kinematics PRIVATE
+    TEST_ARM_URDF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../robot_arm_description/urdf/imported/arm_urdf_v1.urdf"
+  )
+  ament_add_gtest(test_analytic_ik test/test_analytic_ik.cpp)
+  target_link_libraries(test_analytic_ik robot_arm_motion)
+  target_compile_definitions(test_analytic_ik PRIVATE
+    TEST_ARM_URDF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../robot_arm_description/urdf/imported/arm_urdf_v1.urdf"
+  )
 endif()
 
 ament_package()

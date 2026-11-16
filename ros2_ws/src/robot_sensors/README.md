@@ -1,5 +1,107 @@
 # robot_sensors
 
+## 维特 HWT901B-TTL 独立偏航角读取
+
+新增 `wit_imu_node`，直接读取 Jetson 上的 USB-TTL 串口。此节点只接收数据，
+不发送模块配置、置零或校准指令；STM32 固件、`base_serial_node` 反馈解析及原始里程计均保留。
+当前 `row_navigation_node` 已独立订阅 `/imu/wit/data` 进行航向保持，位置/速度仍使用 `/base/odom`。
+
+### 接线和模块设置
+
+- 模块 TX 接 USB-TTL 的 RX，GND 共地；供电电压和 TTL 电平先按对应模块说明书确认，勿接 RS-232 电平。
+- 在维特上位机确认已启用标准二进制 UART 角度输出（`0x53`），并记下实际波特率。
+- 配置文件按实测使用 `/dev/ttyCH341USB0`、`115200`；换设备时改成模块实际值，节点不会自动探测或改写模块。
+- 用 `ls -l /dev/serial/by-id/` 找稳定路径；也可先使用实际的 `/dev/ttyUSB0` 测试。
+  不要同时用串口助手和 ROS 节点读取同一个端口。
+
+### 编译和启动（Jetson / ROS 2 Humble）
+
+以下在仓库的 `ros2_ws` 目录执行。无需启动底盘、行为树或机械臂，也无需 Conda。
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --packages-up-to robot_sensors --symlink-install
+source install/setup.bash
+
+ros2 run robot_sensors wit_imu_node --ros-args \
+  --params-file src/robot_sensors/config/wit_imu.yaml \
+  -p serial_device:=/dev/ttyCH341USB0 \
+  -p baud_rate:=115200
+```
+
+将设备和波特率替换为实际值。参数集中在 `config/wit_imu.yaml`，均附中文注释。
+参数为启动时读取且只读；修改后重启节点。当前支持 4800/9600/19200/38400/57600/115200/230400 baud，8N1。
+
+### 话题和手动检查
+
+所有输出使用 `SensorDataQoS`（best effort、volatile）；每收到一帧校验正确的角度报文才发布一次。
+
+| 话题 | 类型 | 含义 |
+| --- | --- | --- |
+| `/imu/wit/yaw_raw_deg` | `std_msgs/msg/Float64` | 模块原始偏航角，度 |
+| `/imu/wit/yaw_deg` | `std_msgs/msg/Float64` | 软件零点、方向和偏置处理后的角度，度 |
+| `/imu/wit/yaw_rad` | `std_msgs/msg/Float64` | 与上一话题相同的偏航角，弧度 |
+| `/imu/wit/data` | `sensor_msgs/msg/Imu` | 带主机接收时间、坐标系和姿态四元数，当前导航的航向输入 |
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 topic echo /imu/wit/yaw_deg --qos-profile sensor_data
+# 在另一个终端检查带时间戳的接口或原始值：
+ros2 topic echo /imu/wit/data --qos-profile sensor_data
+ros2 topic echo /imu/wit/yaw_raw_deg --qos-profile sensor_data
+```
+
+先静置观察漂移，再手动水平转动约 90 度，核对变化量和正负方向。
+处理后的偏航角落在 `[-180, 180)`，越界时的正负跳变属于角度环绕。
+`yaw_sign` 仅允许 `1.0` 或 `-1.0`。默认 `zero_yaw_on_start: true`，每次节点启动以第一帧偏航为零点；
+如需保留模块自身的航向，设为 `false`。串口重连不会重新取零；`yaw_offset_deg` 保持 `0.0` 时首帧输出为零。
+计算方式是 `wrap(yaw_sign * (raw_yaw - reference) + yaw_offset_deg)`，软件零点不等于陀螺仪零偏/磁力计校准。
+
+`/imu/wit/data` 中 roll/pitch 使用模块角度，yaw 使用与 `yaw_rad` 相同的处理结果。
+`frame_id` 默认 `wit_imu_link`，时间戳为主机读到该帧的时间，不是模块采样时间；
+角度帧不含采样时间。姿态协方差全零表示未知；未读取角速度/加速度，故它们的协方差首项为 `-1`。
+节点不发布 TF；`yaw_sign`/`yaw_offset_deg` 也不能代替完整的安装姿态变换。
+测试时先按平放安装核对方向，不能仅把 `frame_id` 改成 `base_link` 就认为完成坐标转换。
+
+### 断线行为和导航接入边界
+
+- 打开失败、拔出或串口读错误会关闭旧描述符，并按 `reconnect_interval_s` 重新打开路径。
+  使用稳定路径可适应 USB-TTL 重新枚举；固定 `ttyUSB0` 名称本身不保证指向同一设备。
+- 超过 `stale_timeout_s` 未收到有效角度帧会告警，显示节点生命周期内的字节数、有效包数和校验错误数。
+  断流期间不补发旧数据或零值；后续使用者必须单独检查时间戳/接收超时，失效时停车，不能一直沿用缓存。
+- 只有其他数据包、波特率不符、接线错误或未启用角度输出时不会生成偏航角。
+  自动重连不能修复供电、USB 接触、驱动或电磁干扰问题；模块自身复位造成的航向跳变也不在此节点内自动掩盖。
+- 当前 `row_navigation_node` 的 `imu_callback()` 独立订阅 `/imu/wit/data`，
+  用维特四元数航向完成前进、后退、横移的 `yaw_kp` / `yaw_ki` 控制。
+  `use_external_imu: true` 时要求有效且带新时间戳的 IMU；缺失或超过 `imu_timeout_s`（默认 0.30 秒）
+  会拒绝运动/中止动作并发送零速，不会自动改用旧航向。
+  `odom_callback()` 仍接收 `/base/odom` 的位置、速度，保留编码器行程和停车反馈；
+  原里程计的位置积分、姿态及其坐标系不变。没有生成带虚构位置/速度的新里程计。
+  STM32 固件和串口反馈解析无需改动，也不能把整个里程计话题重映射为 IMU。
+  `robot_chassis/chassis.launch.py` 已包含维特节点，整体启动时不要再独立启动第二个读取节点。
+  任务运行期间不要单独重启或重新归零维特节点；停下任务，重启导航节点后再开始。
+  旧航向仅在显式设置 `use_external_imu: false` 时使用；仿真启动的 `serial_enabled:=false` 默认选择旧模式。
+
+### 协议和自动化测试
+
+按维特标准二进制协议读取 `55 53 RollL RollH PitchL PitchH YawL YawH VL VH SUM`，
+11 字节、前 10 字节累加取低 8 位校验；角度为有符号小端 16 位值乘以 `180/32768`。
+解析器支持分包、连续包、杂字节、坏校验后的重新同步，忽略加速度和角速度等其他报文。
+厂商 SDK 参考：<https://github.com/WITMOTION/WitStandardProtocol_JY901>。
+
+```bash
+# 在已经 source ROS 和工作空间、完成编译的终端中执行；不访问实物：
+colcon test --packages-select robot_sensors --event-handlers console_direct+
+colcon test-result --test-result-base build/robot_sensors --verbose
+```
+
+`wit_imu_protocol` 检查解码、校验、重同步和角度零点；`wit_imu_serial` 使用虚拟串口验证
+真实节点的 ROS 输出、时间戳、停流不重发和断线重连。WSL Jazzy 编译/虚拟串口通过不等同于
+Jetson Humble、实际模块输出或底盘控制已经验证。
+
+## 超声波驱动
+
 `ultrasonic_node` 负责读取连接到 Jetson 的四个 DYP-A21 超声波传感器。当前使用 CH9344 前四个串口：
 
 ```text

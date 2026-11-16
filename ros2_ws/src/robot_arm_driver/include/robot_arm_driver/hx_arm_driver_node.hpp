@@ -1,6 +1,7 @@
 #pragma once
 
 #include "robot_arm_driver/coordinate_bus.hpp"
+#include "robot_arm_driver/joint_angle_calibration.hpp"
 #include "robot_arm_interfaces/action/move_joints.hpp"
 
 #include <control_msgs/action/follow_joint_trajectory.hpp>
@@ -13,6 +14,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -47,21 +49,25 @@ class HxArmDriverNode final : public rclcpp::Node
     bool validate_trajectory(
       const FollowJointTrajectory::Goal &goal, std::string &reason) const;
     void execute(const std::shared_ptr<GoalHandleMoveJoints> &goal_handle);
-    bool validate_goal(const MoveJoints::Goal &goal, std::string &reason) const;
+    bool validate_goal(const MoveJoints::Goal &goal, std::string &reason);
     std::vector<int16_t> goal_to_ticks(const MoveJoints::Goal &goal) const;
     sensor_msgs::msg::JointState state_from_ticks(const std::vector<int16_t> &ticks) const;
     void publish_state(const std::vector<int16_t> &ticks);
     void poll_feedback();
     std::optional<int16_t> read_position(size_t index);
+    bool refresh_position(size_t index);
     void write_checked(uint8_t id, const std::vector<uint8_t> &frame, const std::string &operation);
     void set_position_mode(uint8_t id);
     void set_torque(uint8_t id, bool enabled);
+    void hold_requested_joints(const MoveJoints::Goal &goal);
     void emergency_stop();
 
     std::unique_ptr<CoordinateBus> bus_;
     std::vector<std::string> joint_names_;
     std::vector<int64_t> servo_ids_;
     std::vector<double> zero_ticks_;
+    std::vector<double> urdf_zero_ticks_;
+    std::vector<JointAngleCalibration> joint_calibrations_;
     std::vector<double> ticks_per_radian_;
     std::vector<double> directions_;
     std::vector<int64_t> min_ticks_;
@@ -70,11 +76,16 @@ class HxArmDriverNode final : public rclcpp::Node
     std::unordered_map<std::string, size_t> joint_index_;
     std::vector<int16_t> last_ticks_;
     std::vector<bool> online_;
+    std::mutex activity_mutex_;
     uint16_t goal_speed_{100};
     uint8_t goal_acceleration_{0};
     int position_tolerance_ticks_{20};
+    int stationary_tolerance_ticks_{3};
+    int stationary_duration_ms_{500};
+    int stationary_min_wait_ms_{1000};
     int feedback_timeout_ms_{50};
     bool allow_motion_{false};
+    bool require_all_feedback_for_joint_states_{false};
     bool enable_torque_on_start_{false};
     std::atomic_bool moving_{false};
 

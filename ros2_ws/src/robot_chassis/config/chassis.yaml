@@ -21,6 +21,11 @@ base_serial_node:
     encoder_counts_per_wheel_rev: 1560.0  # 车轮转一圈对应的编码器计数。
     max_wheel_speed_mps: 1.0  # 单轮最大允许线速度，单位米/秒。
     feedback_timeout_s: 0.30  # 下位机反馈超时时间，单位秒。
+    # 节点启动后等待 IMU 完成初始化，再启用相邻帧 yaw 微小变化过滤。
+    imu_yaw_increment_deadband_startup_delay_s: 5.0
+    # 相邻两帧原始 yaw 的变化绝对值小于此值时不累加；单位 rad/帧，0.0 关闭。
+    # 0.0001 rad 约 0.00573°；也会屏蔽低于此变化量的真实慢转，不等同于 IMU 零偏标定。
+    imu_yaw_increment_deadband_rad: 0.0000
     wheel_sign_a: 1  # A 轮编码器方向修正系数，通常为 1 或 -1。
     wheel_sign_b: 1  # B 轮编码器方向修正系数，通常为 1 或 -1。
     wheel_sign_c: 1  # C 轮编码器方向修正系数，通常为 1 或 -1。
@@ -28,25 +33,37 @@ base_serial_node:
 
 row_navigation_node:
   ros__parameters:
+    # 航向保持改用维特 IMU；位置、线速度和停车反馈仍使用原 /base/odom。
+    use_external_imu: true
+    external_imu_topic: /imu/wit/data  # sensor_msgs/Imu，SensorDataQoS。
+    imu_timeout_s: 0.30  # 缺少/无效/超时的 IMU 会停止动作；不会自动切回旧航向。
+    # 第一段前进：左距滤波值小于此值后启用左侧调节，并保持到该段结束，单位米。
+    first_row_left_enable_distance_m: 0.10
     # 合格芒果直接触发低速；树干按旋转后画面的水平误差做 PI 居中。
-    vision_tree_kp: 0.2  # 输入为画面宽度归一化误差，输出为横移 m/s。
-    vision_tree_ki: 0.02  # 图像误差积分增益。
+    vision_tree_kp: 0.4  # 输入为画面宽度归一化误差，输出为横移 m/s。
+    vision_tree_ki: 0.15  # 图像误差积分增益。
     vision_tree_integral_limit: 0.20  # 归一化误差积分限幅。
-    vision_tree_max_speed_mps: 0.12  # 找树干速度及居中速度上限，单位 m/s。
-    vision_tree_center_tolerance_ratio: 0.02  # ±画面宽度的 2%；640 像素宽时为 ±12.8 像素。
+    vision_tree_max_speed_mps: 0.50  # 找树干速度及居中速度上限，单位 m/s。
+    vision_tree_center_tolerance_ratio: 0.07  # ±画面宽度的 2%；640 像素宽时为 ±12.8 像素。
     vision_stop_settle_s: 0.30
     vision_observation_timeout_s: 0.60
     vision_tree_search_distance_m: 0.35
     vision_tree_alignment_timeout_s: 15.0
     vision_tree_control_sign: -1.0  # 实测调整：1=画面右偏发正 Y，-1=画面右偏发负 Y。
+    # 回位后继续当前横移段；不要求相机画面出现没有芒果的间隔。
+    vision_rearm_distance_m: 0.10  # 沿路线走过至少此距离后才允许下一棵树触发。
+    vision_rearm_departure_ratio: 0.08  # 上一树干离开中心 ±8% 区域，或树干暂时不可见。
+    vision_rearm_delay_s: 0.5  # 回位放行后的最短防重复触发时间。
+    # 仅在离开旧树的距离、时间和出中心条件未全部满足时限速；满足后恢复路线速度。
+    vision_rearm_speed_mps: 0.70
     loop_hz: 20.0  # 导航控制循环频率，单位 Hz。
     sensor_timeout_s: 0.30  # 传感器数据超时时间，单位秒。
-    side_kp: 1.2  # 侧向距离误差的比例增益。
-    yaw_kp: 4.0  # 航向角误差的比例增益。
+    side_kp: 1.5  # 侧向距离误差的比例增益。
+    yaw_kp: 6.0  # 航向角误差的比例增益。
     yaw_ki: 0.0  # 航向角误差的积分增益。
     yaw_integral_limit: 2.0  # 航向积分项限幅。
     max_acceleration_mps2: 0.8  # 最大加速度，单位米/秒²。
-    max_deceleration_mps2: 0.8  # 最大减速度，单位米/秒²。
+    max_deceleration_mps2: 5.0  # 最大减速度，单位米/秒²。前进段使用这个值
     ultrasonic_filter_window: 3  # 超声波距离滤波窗口长度。
     shift_wall_enable_tolerance_m: 0.05  # 横移时启用墙面控制的距离容差，单位米。
     shift_wall_cancel_side_distance_m: 0.25  # 侧距达到此值时可取消墙面控制，单位米。
@@ -58,8 +75,8 @@ row_navigation_node:
     stop_settle_s: 0.20  # 速度满足停止阈值后需稳定的时间，单位秒。
     # 光电到位时跳过速度斜坡，然后等待新的零速里程计反馈。
     photoelectric_stop_timeout_s: 3.0  # 等待停车确认的最长时间，单位秒。
-    default_front_slow_m: 0.30  # 前方进入减速的默认距离，单位米。
-    default_front_stop_m: 0.05  # 前方停车的默认距离，单位米。
+    default_front_slow_m: 0.70  # 前方进入减速的默认距离，单位米。
+    default_front_stop_m: 0.20  # 前方停车的默认距离，单位米。
     default_safety_distance_m: 0.05  # 默认安全距离，单位米。
     reverse_speed_mps: 0.50  # 后退速度，单位米/秒。
     reverse_distance_kp: 2.0  # 后退距离误差比例增益，单位 1/s。
@@ -67,9 +84,9 @@ row_navigation_node:
     reverse_distance_tolerance_m: 0.01  # 后退到位距离容差，单位米。
     reverse_slow_distance_m: 0.20  # 后退剩余距离小于此值时开始减速，单位米。
     shift_side_target_m: 0.05  # 横移侧向目标距离，单位米。
-    shift_side_slow_distance_m: 0.50  # 横移接近侧向目标时的减速距离，单位米。
+    shift_side_slow_distance_m: 0.60  # 横移接近侧向目标时的减速距离，单位米。
     shift_front_target_m: 0.04  # 横移前方目标距离，单位米。
-    shift_front_kp: 1.0  # 前方距离误差修正的比例增益。
+    shift_front_kp: 2.0  # 前方距离误差修正的比例增益。
     max_front_correction_mps: 0.08  # 前向修正速度最大值，单位米/秒。
     mango_brake_time_s: 0.35  # 芒果触发停车后的制动等待时间，单位秒。
 
@@ -88,14 +105,14 @@ mission_behavior_node:
     shift_vision_stop_step_8: false
     row_count: 7  # 任务路线的垄数。
     step_count: 16  # 整条路线的动作步骤数。
-    row_speed_mps: 0.80  # 沿垄行驶速度，单位米/秒。
+    row_speed_mps: 0.90  # 沿垄行驶速度，单位米/秒。
     shift_distance_m: 0.30  # 每次横移距离，单位米。
-    shift_speed_mps: 0.60  # 横移速度，单位米/秒。
+    shift_speed_mps: 0.70  # 横移速度，单位米/秒。
     shift_first_lateral_speed_mps: 0.0  # Route step 2; 0 uses shift_speed_mps.
     shift_route_step_15_speed_mps: 0.0  # Route step 15; 0 uses shift_speed_mps.
     row_side_target_m: 0.05  # 沿垄行驶时的侧向目标距离，单位米。
-    front_slow_distance_m: 0.50  # 前方减速距离，单位米。
-    front_stop_distance_m: 0.05  # 前方停车距离，单位米。
+    front_slow_distance_m: 0.70  # 前方减速距离，单位米。
+    front_stop_distance_m: 0.25  # 前方停车距离，单位米。
     shift_safety_distance_m: 0.04  # 横移时要求保持的安全距离，单位米。
     reverse_speed_mps: 0.50  # 后退速度，单位米/秒。
     reverse_distance_kp: 2.0  # 后退距离误差比例增益，单位 1/s。
@@ -148,7 +165,7 @@ mission_behavior_node:
     mango_timeout_s: 0.50  # 视觉目标数据超时时间，单位秒。
     mango_rearm_delay_s: 1.0  # 芒果处理完成后重新允许触发的等待时间，单位秒。
     mango_min_distance_m: 0.30  # 允许处理的芒果最小距离，单位米。
-    mango_max_distance_m: 1.50  # 允许处理的芒果最大距离，单位米。
+    mango_max_distance_m: 1.00  # 允许处理的芒果最大距离，单位米。
     mango_center_tolerance_m: 0.10  # 芒果目标中心允许偏差，单位米。
     mango_approach_height_m: 0.10  # 机械臂接近芒果时使用的高度，单位米。
     mango_grasp_offset_x_m: 0.0  # 抓取目标 X 方向偏移，单位米。

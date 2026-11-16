@@ -8,20 +8,22 @@ mango_vision_node:
     width: 640
     height: 480
     fps: 30
-    process_hz: 5.0
+    process_hz: 20.0
     serial: ""
     rotate: cw
     # Enable target publication after measuring the camera-to-base transform.
-    publish_targets: false
+    publish_targets: true
     calibration: ""
     target_frame: base_link
     min_target_confidence: 0.75
     track_match_distance_m: 0.08
     # 芒果减速、树干居中与停稳后选果共用光学深度范围，含上下边界，单位米。
-    harvest_min_depth_m: 0.40
-    harvest_max_depth_m: 0.60
+    harvest_min_depth_m: 0.30
+    harvest_max_depth_m: 0.70
     selection_stable_frames: 3
     # 旋转后画面的目标横坐标；0.5 为画面正中央，居中不依赖机械臂标定。
     tree_center_x_ratio: 0.5
     stop_state_timeout_s: 0.60
     publish_legacy_target: false
+
+    #32.5cm/18cm/7cm

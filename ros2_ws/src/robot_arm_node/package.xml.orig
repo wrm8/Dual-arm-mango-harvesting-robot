@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_arm_node</name>
+  <version>0.1.0</version>
+  <description>Reusable motion functions for the robot arm.</description>
+  <maintainer email="wrm@example.com">wrm</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <!-- 👇 这是你原有的基础依赖 -->
+  <depend>rclcpp</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>kdl_parser</depend>
+  <depend>urdf</depend>
+  <depend>orocos_kdl</depend>
+  <depend>eigen</depend>
+
+  <!-- 👇 这是必须补上的 Action 和 消息依赖 -->
+  <depend>rclcpp_action</depend>
+  <depend>control_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>robot_arm_interfaces</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -120,3 +120,7 @@ ls -l /dev/ttyACM0
    usbipd detach --busid 4-1
    usbipd attach --wsl Ubuntu --busid 4-1
 4. ls /dev/ttyUSB* /dev/ttyACM* //wsl中验证
+
+
+
+urdf_zero_ticks: [1887.0, 2384.0, 3602.0, 1889.0, 518.0, 760.0, 3582.0, 1592.0, 2977.0, 1843.0, 393.0, -23.0]

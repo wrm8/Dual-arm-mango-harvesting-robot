@@ -74,6 +74,20 @@ install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME test_hx_direct_dispatch
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/test_hx_direct_dispatch.py"
+      "$<TARGET_FILE:robot_arm_hx_driver_node>")
+  set_tests_properties(test_hx_direct_dispatch PROPERTIES TIMEOUT 60)
+  ament_add_gtest(test_driver_parameters test/test_driver_parameters.cpp)
+  ament_target_dependencies(test_driver_parameters rclcpp)
+  target_compile_definitions(test_driver_parameters PRIVATE
+    ARM_DRIVER_PARAMETERS_FILE="${CMAKE_CURRENT_SOURCE_DIR}/config/arm_driver.yaml")
+  ament_add_gtest(test_joint_angle_calibration test/test_joint_angle_calibration.cpp)
+  target_include_directories(test_joint_angle_calibration PRIVATE include)
+  ament_add_gtest(test_joint_stationary_monitor test/test_joint_stationary_monitor.cpp)
+  target_compile_features(test_joint_stationary_monitor PRIVATE cxx_std_17)
+  target_include_directories(test_joint_stationary_monitor PRIVATE include)
   ament_add_gtest(test_servo_protocol test/test_servo_protocol.cpp)
   target_link_libraries(test_servo_protocol servo_protocol)
   target_include_directories(test_servo_protocol PRIVATE include)

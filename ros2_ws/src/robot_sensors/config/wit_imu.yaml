@@ -1,0 +1,20 @@
+wit_imu_node:
+  ros__parameters:
+    # 使用实际 USB-TTL 串口；建议改为 /dev/serial/by-id/ 下的稳定路径。
+    serial_device: /dev/ttyCH341USB0
+    # 读取波特率必须与模块当前配置一致；节点不会修改模块设置。
+    baud_rate: 115200
+    # 数据所属的传感器坐标系；本节点不发布 TF。
+    frame_id: wit_imu_link
+    # 主机轮询频率，不是模块输出频率。
+    poll_rate_hz: 200.0
+    # 连续多久没有有效角度帧时告警；超时期间不重复发布旧数据。
+    stale_timeout_s: 0.5
+    # 串口断开或打开失败后的重试间隔。
+    reconnect_interval_s: 1.0
+    # 偏航角方向，只允许 1.0 或 -1.0；先手动转动验证方向再修改。
+    yaw_sign: 1.0
+    # 软件偏航偏置，单位度；不等于写入模块的校准。
+    yaw_offset_deg: 0.0
+    # true：节点启动后的第一帧偏航作为零点；重连不重新取零。
+    zero_yaw_on_start: true

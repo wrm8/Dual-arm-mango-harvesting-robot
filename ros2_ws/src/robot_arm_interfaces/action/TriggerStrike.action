@@ -1,0 +1,11 @@
+# Trigger the selected STM32-controlled end effectors once. No MCU feedback is read.
+string[] arms
+# Local delay AFTER writing the trigger, before allowing the arm to return home.
+# This is not confirmation that the MCU has completed its programmed revolutions.
+float64 wait_s
+---
+# True means the complete frame was written and the local delay elapsed only.
+bool success
+string message
+---
+float64 elapsed_s

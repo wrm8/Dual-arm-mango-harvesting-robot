@@ -1,0 +1,145 @@
+import json
+import math
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _read_driver(path):
+    with open(path, "r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream)
+    params = document["robot_arm_driver"]["ros__parameters"]
+    names = params["joint_names"]
+    if len(names) != 12 or len(set(names)) != 12:
+        raise ValueError("dual_arm_driver.yaml must define 12 unique prefixed joints")
+    required = ("zero_ticks", "urdf_zero_ticks", "ticks_per_radian", "directions",
+                "min_ticks", "max_ticks")
+    arrays = {key: params[key] for key in required}
+    if any(len(values) != 12 for values in arrays.values()):
+        raise ValueError("all dual-arm calibration arrays must contain 12 entries")
+    ik_limits = {}
+    for side in ("left", "right"):
+        lower, upper = [], []
+        for joint in range(1, 6):
+            index = names.index(f"{side}_joint{joint}")
+            scale = float(arrays["directions"][index]) * float(arrays["ticks_per_radian"][index])
+            model_zero = float(arrays["urdf_zero_ticks"][index])
+            lo = (float(arrays["min_ticks"][index]) - model_zero) / scale
+            hi = (float(arrays["max_ticks"][index]) - model_zero) / scale
+            if not all(math.isfinite(value) for value in (scale, lo, hi)) or scale == 0 or lo == hi:
+                raise ValueError(f"invalid calibrated IK limits for {side}_joint{joint}")
+            lower.append(min(lo, hi))
+            upper.append(max(lo, hi))
+        ik_limits[f"{side}_ik_lower_limits"] = lower
+        ik_limits[f"{side}_ik_upper_limits"] = upper
+    return params, ik_limits
+
+
+def _read_transforms(path):
+    with open(path, "r", encoding="utf-8") as stream:
+        document = json.load(stream)
+    if document.get("source_frame") != "camera_color_optical_frame":
+        raise ValueError("camera transform source_frame must be camera_color_optical_frame")
+    result = {}
+    for side in ("left", "right"):
+        item = document[side]
+        expected_frame = f"{side}_base_link"
+        if item.get("target_frame") != expected_frame:
+            raise ValueError(f"{side} target_frame must be {expected_frame}")
+        matrix = item.get("camera_to_base")
+        if not isinstance(matrix, list) or len(matrix) != 4 or any(
+                not isinstance(row, list) or len(row) != 4 for row in matrix):
+            raise ValueError(f"{side} camera_to_base must be a 4x4 matrix")
+        result[f"{side}_camera_to_base"] = [float(value) for row in matrix for value in row]
+        result[f"{side}_transform_calibrated"] = item.get("calibrated") is True
+    return result
+
+
+def _launch_nodes(context):
+    driver_path = LaunchConfiguration("driver_params").perform(context)
+    transforms_path = LaunchConfiguration("camera_transforms").perform(context)
+    driver, ik_limits = _read_driver(driver_path)
+    transforms = _read_transforms(transforms_path)
+    description_share = get_package_share_directory("robot_arm_description")
+    with open(os.path.join(description_share, "urdf", "imported", "arm_urdf_v1.urdf"),
+              "r", encoding="utf-8") as stream:
+        description = stream.read()
+    runtime = {
+        "driver_joint_names": driver["joint_names"],
+        "zero_ticks": driver["zero_ticks"],
+        "urdf_zero_ticks": driver["urdf_zero_ticks"],
+        "ticks_per_radian": driver["ticks_per_radian"],
+        "directions": driver["directions"],
+        "min_ticks": driver["min_ticks"],
+        "max_ticks": driver["max_ticks"],
+        **ik_limits,
+        **transforms,
+        "left_ticks_calibrated": ParameterValue(
+            LaunchConfiguration("left_ticks_calibrated"), value_type=bool),
+        "right_ticks_calibrated": ParameterValue(
+            LaunchConfiguration("right_ticks_calibrated"), value_type=bool),
+        "arm_speeds": [int(value) for value in
+                       LaunchConfiguration("arm_speeds").perform(context).split(",")],
+        "gripper_speed": ParameterValue(LaunchConfiguration("gripper_speed"), value_type=int),
+        "target_tool_tilt": ParameterValue(LaunchConfiguration("target_tool_tilt"), value_type=float),
+        "target_joint5": ParameterValue(LaunchConfiguration("target_joint5"), value_type=float),
+        "gripper_close_native_rad": ParameterValue(
+            LaunchConfiguration("gripper_close_native_rad"), value_type=float),
+        "gripper_open_native_rad": ParameterValue(
+            LaunchConfiguration("gripper_open_native_rad"), value_type=float),
+        "move_duration_ms": ParameterValue(LaunchConfiguration("move_duration_ms"), value_type=int),
+        "gripper_duration_ms": ParameterValue(
+            LaunchConfiguration("gripper_duration_ms"), value_type=int),
+        "move_timeout_ms": ParameterValue(LaunchConfiguration("move_timeout_ms"), value_type=int),
+        "home_timeout_ms": ParameterValue(LaunchConfiguration("home_timeout_ms"), value_type=int),
+        "open_delay_ms": ParameterValue(LaunchConfiguration("open_delay_ms"), value_type=int),
+        "dry_run": ParameterValue(LaunchConfiguration("dry_run"), value_type=bool),
+        "allow_motion": ParameterValue(LaunchConfiguration("allow_motion"), value_type=bool),
+    }
+    return [
+        Node(package="robot_state_publisher", executable="robot_state_publisher",
+             name="robot_state_publisher", output="screen",
+             parameters=[{"robot_description": description}]),
+        Node(package="robot_arm_driver", executable="robot_arm_hx_driver_node",
+             name="robot_arm_driver", output="screen",
+             parameters=[driver_path, {
+                 "allow_motion": ParameterValue(
+                     LaunchConfiguration("allow_motion"), value_type=bool)}]),
+        Node(package="robot_arm_node", executable="dual_arm_harvest_node",
+             name="dual_arm_harvest_node", output="screen", parameters=[runtime]),
+    ]
+
+
+def generate_launch_description():
+    driver_share = get_package_share_directory("robot_arm_driver")
+    vision_share = get_package_share_directory("robot_vision")
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            "driver_params",
+            default_value=os.path.join(driver_share, "config", "dual_arm_driver.yaml")),
+        DeclareLaunchArgument(
+            "camera_transforms",
+            default_value=os.path.join(vision_share, "config", "camera_to_bases.json")),
+        DeclareLaunchArgument("dry_run", default_value="true"),
+        DeclareLaunchArgument("allow_motion", default_value="false"),
+        DeclareLaunchArgument("left_ticks_calibrated", default_value="false"),
+        DeclareLaunchArgument("right_ticks_calibrated", default_value="false"),
+        DeclareLaunchArgument("arm_speeds", default_value="100,500,700,200,20"),
+        DeclareLaunchArgument("gripper_speed", default_value="20"),
+        DeclareLaunchArgument("target_tool_tilt", default_value="0.0"),
+        DeclareLaunchArgument("target_joint5", default_value="0.0"),
+        DeclareLaunchArgument("gripper_close_native_rad", default_value="-2.0"),
+        DeclareLaunchArgument("gripper_open_native_rad", default_value="0.0"),
+        DeclareLaunchArgument("move_duration_ms", default_value="5000"),
+        DeclareLaunchArgument("gripper_duration_ms", default_value="1000"),
+        DeclareLaunchArgument("move_timeout_ms", default_value="15000"),
+        DeclareLaunchArgument("home_timeout_ms", default_value="15000"),
+        DeclareLaunchArgument("open_delay_ms", default_value="500"),
+        OpaqueFunction(function=_launch_nodes),
+    ])

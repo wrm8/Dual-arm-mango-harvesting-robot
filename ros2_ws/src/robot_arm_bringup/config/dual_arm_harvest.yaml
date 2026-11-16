@@ -1,0 +1,46 @@
+dual_arm_harvest_node:
+  ros__parameters:
+    # false: 原夹爪流程；true: 到位后串口触发独立 STM32 击打（左右两臂均适用）。
+    use_motor: false
+    # true：新机构空载测试，不连接击打板，仍到位、等待、回位；只对 use_motor=true 生效。
+    skip_strike: false
+    # 发出触发帧后等待的上位机时间，再回弯折零位；不读取下位机完成反馈。
+    # 下位机自行转 10 圈并停机；该延时不保证 10 圈已经完成。
+    motor_return_delay_s: 1.0
+    # 自动跑垄：从本次首次 HOLDING 起最多尝试 10 秒，超时取消、回位后继续。
+    # 回位另用 home_timeout_ms；回位失败不放行底盘。人工 stop_id=0 和停点调试不启用。
+    harvest_timeout_s: 10.0
+    # 伸向果实：正常到位即完成；未到位置容差但全部请求关节已停稳，也算完成。
+    # 回零位仍按驱动 position_tolerance_ticks 确认；目标、IK 和速度不变。
+    approach_complete_when_stationary: true
+    # 先由 slot 选择 left/right，再由 is_small 选择 small/large；颜色不决定大小。
+    use_size_profiles: true
+    gripper_duration_ms: 2000
+    gripper_open_native_rad: 0.0
+
+    # XYZ 单位米，沿各自机械臂 base_link 的坐标轴，在相机坐标转换后、IK 前相加。
+    # 保留原代码已记录的左大果偏移；左小果尚未测量，默认零偏移。
+    left_large_offset_m: [0.04, -0.01, -0.045]
+    left_large_gripper_pregrasp_native_rad: 0.0
+    left_large_gripper_close_native_rad: -1.0
+    left_small_offset_m: [0.04, -0.01, -0.06]
+    left_small_gripper_pregrasp_native_rad: -1.0
+    left_small_gripper_close_native_rad: -2.0
+
+    # 保留原代码右臂通用偏移，分别复制到两种果型，后续可独立修改。
+    right_large_offset_m: [0.04, -0.02, -0.065]
+    right_large_gripper_pregrasp_native_rad: 0.0
+    right_large_gripper_close_native_rad: -1.0
+    right_small_offset_m: [0.04, -0.02, -0.07]
+    right_small_gripper_pregrasp_native_rad: -1.0
+    right_small_gripper_close_native_rad: -2.0
+
+    # 上方果实：joint1～joint5，左右臂共用。
+    top_arm_speeds: [300, 900, 700, 500, 20]
+    top_move_duration_ms: 5000
+    # 下方果实：joint1～joint5，左右臂共用。
+    bottom_arm_speeds: [300, 900, 600, 500, 20]
+    bottom_move_duration_ms: 5000
+    # 正常回位、抓取超时后的回位。
+    home_arm_speeds: [20, 600, 1000, 700, 20]
+    home_move_duration_ms: 2000

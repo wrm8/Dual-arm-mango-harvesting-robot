@@ -1,11 +1,13 @@
 #include "robot_arm_driver/hx_arm_driver_node.hpp"
 
 #include "robot_arm_driver/coordinate_protocol.hpp"
+#include "robot_arm_driver/joint_stationary_monitor.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
@@ -23,6 +25,7 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
   declare_parameter("servo_ids", std::vector<int64_t>{1, 2, 3, 4, 5, 6});
   declare_parameter("servo_protocols", std::vector<std::string>{"hx", "hx", "hx", "hx", "v3", "v3"});
   declare_parameter("zero_ticks", std::vector<double>{0, 0, 0, 0, 0, 0});
+  declare_parameter("urdf_zero_ticks", std::vector<double>{});
   declare_parameter("ticks_per_radian", std::vector<double>{
       651.8986, 651.8986, 651.8986, 651.8986, 651.8986, 651.8986});
   declare_parameter("directions", std::vector<double>{1, 1, 1, 1, 1, 1});
@@ -33,15 +36,24 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
   declare_parameter("goal_speed", 100);
   declare_parameter("goal_acceleration", 0);
   declare_parameter("position_tolerance_ticks", 20);
+  declare_parameter("stationary_tolerance_ticks", 3);
+  declare_parameter("stationary_duration_ms", 500);
+  declare_parameter("stationary_min_wait_ms", 1000);
   declare_parameter("feedback_poll_period_ms", 200);
   declare_parameter("feedback_timeout_ms", 50);
   declare_parameter("allow_motion", false);
+  declare_parameter("require_all_feedback_for_joint_states", false);
   declare_parameter("enable_torque_on_start", false);
 
   joint_names_ = get_parameter("joint_names").as_string_array();
   servo_ids_ = get_parameter("servo_ids").as_integer_array();
   servo_protocols_ = get_parameter("servo_protocols").as_string_array();
   zero_ticks_ = get_parameter("zero_ticks").as_double_array();
+  urdf_zero_ticks_ = get_parameter("urdf_zero_ticks").as_double_array();
+  if (urdf_zero_ticks_.empty())
+  {
+    urdf_zero_ticks_ = zero_ticks_;
+  }
   ticks_per_radian_ = get_parameter("ticks_per_radian").as_double_array();
   directions_ = get_parameter("directions").as_double_array();
   min_ticks_ = get_parameter("min_ticks").as_integer_array();
@@ -49,7 +61,7 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
   const auto count = joint_names_.size();
 
   if (count == 0U || servo_ids_.size() != count || servo_protocols_.size() != count || zero_ticks_.size() != count ||
-      ticks_per_radian_.size() != count || directions_.size() != count ||
+      urdf_zero_ticks_.size() != count || ticks_per_radian_.size() != count || directions_.size() != count ||
       min_ticks_.size() != count || max_ticks_.size() != count)
   {
     throw std::invalid_argument("all joint calibration arrays must have the same non-zero size");
@@ -57,9 +69,13 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
   const auto configured_speed = get_parameter("goal_speed").as_int();
   const auto configured_acceleration = get_parameter("goal_acceleration").as_int();
   const auto configured_tolerance = get_parameter("position_tolerance_ticks").as_int();
+  const auto stationary_tolerance = get_parameter("stationary_tolerance_ticks").as_int();
+  const auto stationary_duration = get_parameter("stationary_duration_ms").as_int();
+  const auto stationary_min_wait = get_parameter("stationary_min_wait_ms").as_int();
   const auto feedback_poll_period_ms = get_parameter("feedback_poll_period_ms").as_int();
   feedback_timeout_ms_ = static_cast<int>(get_parameter("feedback_timeout_ms").as_int());
   allow_motion_ = get_parameter("allow_motion").as_bool();
+  require_all_feedback_for_joint_states_ = get_parameter("require_all_feedback_for_joint_states").as_bool();
   enable_torque_on_start_ = get_parameter("enable_torque_on_start").as_bool();
 
   if (configured_speed < 0 || configured_speed > 3400 || configured_acceleration < 0 || configured_acceleration > 254 ||
@@ -71,7 +87,17 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
   goal_speed_ = static_cast<uint16_t>(configured_speed);
   goal_acceleration_ = static_cast<uint8_t>(configured_acceleration);
   position_tolerance_ticks_ = configured_tolerance;
+  if (stationary_tolerance < 0 || stationary_tolerance > 100 ||
+      stationary_duration < 100 || stationary_duration > 10000 ||
+      stationary_min_wait < 100 || stationary_min_wait > 30000)
+  {
+    throw std::invalid_argument("invalid stationary tolerance, duration, or minimum wait");
+  }
+  stationary_tolerance_ticks_ = static_cast<int>(stationary_tolerance);
+  stationary_duration_ms_ = static_cast<int>(stationary_duration);
+  stationary_min_wait_ms_ = static_cast<int>(stationary_min_wait);
   last_ticks_.reserve(count);
+  joint_calibrations_.reserve(count);
   for (size_t i = 0; i < count; ++i)
   {
     if (!joint_index_.emplace(joint_names_[i], i).second || servo_ids_[i] < 0 || servo_ids_[i] > 253 ||
@@ -81,12 +107,21 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
     {
       throw std::invalid_argument("invalid HX calibration parameter at index " + std::to_string(i));
     }
+    joint_calibrations_.emplace_back(
+      zero_ticks_[i], urdf_zero_ticks_[i], ticks_per_radian_[i], directions_[i]);
+    if (urdf_zero_ticks_[i] < min_ticks_[i] || urdf_zero_ticks_[i] > max_ticks_[i])
+    {
+      throw std::invalid_argument("urdf_zero_ticks is outside joint limits at index " + std::to_string(i));
+    }
     const auto zero = std::lround(zero_ticks_[i]);
     if (zero < min_ticks_[i] || zero > max_ticks_[i])
     {
       throw std::invalid_argument("zero_ticks is outside joint limits at index " + std::to_string(i));
     }
     last_ticks_.push_back(static_cast<int16_t>(zero));
+    RCLCPP_INFO(
+      get_logger(), "%s calibration: native zero=%.1f ticks, URDF zero=%.1f ticks, direction=%.0f",
+      joint_names_[i].c_str(), zero_ticks_[i], urdf_zero_ticks_[i], directions_[i]);
   }
 
   const auto device = get_parameter("serial_device").as_string();
@@ -152,13 +187,13 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
       response->message = "HX torque disabled";
     });
   publish_state(last_ticks_);
-  if (!allow_motion_ && feedback_poll_period_ms > 0)
+  if (feedback_poll_period_ms > 0)
   {
     feedback_timer_ = create_wall_timer(
       std::chrono::milliseconds(feedback_poll_period_ms),
       std::bind(&HxArmDriverNode::poll_feedback, this));
     RCLCPP_INFO(
-      get_logger(), "read-only HX feedback polling enabled every %ld ms; no motion commands will be sent",
+      get_logger(), "HX feedback polling enabled every %ld ms while idle",
       feedback_poll_period_ms);
   }
   RCLCPP_INFO(
@@ -169,6 +204,12 @@ HxArmDriverNode::HxArmDriverNode() : Node("robot_arm_driver")
 
 void HxArmDriverNode::poll_feedback()
 {
+  std::unique_lock<std::mutex> activity_lock(activity_mutex_, std::try_to_lock);
+  if (!activity_lock.owns_lock() || moving_.load())
+  {
+    return;
+  }
+
   bool received_any = false;
   for (std::size_t i = 0; i < servo_ids_.size(); ++i)
   {
@@ -201,6 +242,12 @@ void HxArmDriverNode::poll_feedback()
 rclcpp_action::GoalResponse HxArmDriverNode::handle_goal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const MoveJoints::Goal> goal)
 {
+  std::lock_guard<std::mutex> activity_lock(activity_mutex_);
+  if (moving_.load())
+  {
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   std::string reason;
 
   if (!validate_goal(*goal, reason))
@@ -226,6 +273,12 @@ rclcpp_action::GoalResponse HxArmDriverNode::handle_trajectory_goal(
   const rclcpp_action::GoalUUID &,
   std::shared_ptr<const FollowJointTrajectory::Goal> goal)
 {
+  std::lock_guard<std::mutex> activity_lock(activity_mutex_);
+  if (moving_.load())
+  {
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   std::string reason;
   if (!validate_trajectory(*goal, reason))
   {
@@ -285,7 +338,8 @@ bool HxArmDriverNode::validate_trajectory(
     }
   }
 
-  int64_t previous_ms = 0;
+  int64_t previous_ns = 0;
+  size_t point_index = 0;
   for (const auto &point : trajectory.points)
   {
     if (point.positions.size() != trajectory.joint_names.size())
@@ -323,9 +377,11 @@ bool HxArmDriverNode::validate_trajectory(
         return false;
       }
     }
-    const int64_t point_ms = static_cast<int64_t>(point.time_from_start.sec) * 1000 +
-      point.time_from_start.nanosec / 1000000;
-    if (point_ms <= previous_ms || point_ms < 20 || point_ms > 60000)
+    const int64_t point_ns = static_cast<int64_t>(point.time_from_start.sec) * 1000000000LL +
+      point.time_from_start.nanosec;
+    const bool zero_time_start = point_index == 0 && point_ns == 0;
+    if (point_ns < 0 || point_ns > 60000000000LL ||
+      (!zero_time_start && point_ns <= previous_ns))
     {
       reason = "time_from_start must strictly increase and remain within 60 seconds";
       return false;
@@ -339,14 +395,15 @@ bool HxArmDriverNode::validate_trajectory(
       }
       const auto index = joint_index_.at(trajectory.joint_names[i]);
       const auto raw = std::lround(
-        zero_ticks_[index] + directions_[index] * point.positions[i] * ticks_per_radian_[index]);
+        joint_calibrations_[index].urdf_to_ticks(point.positions[i]));
       if (raw < min_ticks_[index] || raw > max_ticks_[index])
       {
         reason = "trajectory exceeds calibrated limit for " + trajectory.joint_names[i];
         return false;
       }
     }
-    previous_ms = point_ms;
+    previous_ns = point_ns;
+    ++point_index;
   }
   return true;
 }
@@ -365,82 +422,23 @@ void HxArmDriverNode::execute_trajectory(
   try
   {
     const auto start = std::chrono::steady_clock::now();
-    int64_t previous_ms = 0;
-    for (const auto &point : trajectory.points)
-    {
-      if (goal_handle->is_canceling())
-      {
+    const auto requested_goal_tolerance_ms =
+      static_cast<int64_t>(goal->goal_time_tolerance.sec) * 1000 +
+      goal->goal_time_tolerance.nanosec / 1000000;
+    const auto grace_ms = requested_goal_tolerance_ms > 0 ? requested_goal_tolerance_ms : 5000;
+    int64_t previous_ns = 0;
+    bool first_point = true;
+    const auto cancelled = [&]() {
+        if (!goal_handle->is_canceling()) {
+          return false;
+        }
         emergency_stop();
         fail(FollowJointTrajectory::Result::INVALID_GOAL, "trajectory cancelled; stop sent");
         goal_handle->canceled(result);
         moving_.store(false);
-        return;
-      }
-
-      const int64_t point_ms = static_cast<int64_t>(point.time_from_start.sec) * 1000 +
-        point.time_from_start.nanosec / 1000000;
-      const auto segment_ms = static_cast<uint16_t>(std::clamp<int64_t>(point_ms - previous_ms, 20, 30000));
-      std::vector<HxPositionTarget> hx_targets;
-      hx_targets.reserve(trajectory.joint_names.size());
-
-      for (size_t i = 0; i < trajectory.joint_names.size(); ++i)
-      {
-        const auto index = joint_index_.at(trajectory.joint_names[i]);
-        const auto target = std::lround(
-          zero_ticks_[index] + directions_[index] * point.positions[i] * ticks_per_radian_[index]);
-        if (target < min_ticks_[index] || target > max_ticks_[index])
-        {
-          throw std::out_of_range("trajectory target exceeds calibrated limit for " + trajectory.joint_names[i]);
-        }
-        const auto id = static_cast<uint8_t>(servo_ids_[index]);
-        if (servo_protocols_[index] == "v3")
-        {
-          if (target < 0 || target > 1000)
-          {
-            throw std::out_of_range("V3 target must be in 0..1000 for " + trajectory.joint_names[i]);
-          }
-          bus_->send(encode_v3_position_command(id, static_cast<uint16_t>(target), segment_ms));
-        }
-        else
-        {
-          hx_targets.push_back({id, static_cast<int16_t>(target), goal_speed_, goal_acceleration_});
-        }
-      }
-      for (const auto &target : hx_targets)
-      {
-        write_checked(
-          target.id,
-          encode_hx_reg_position_command(target.id, target.position, target.speed, target.acceleration),
-          "staging trajectory target for");
-      }
-      if (!hx_targets.empty())
-      {
-        bus_->send(encode_hx_action_command());
-      }
-
-      const auto target_time = start + std::chrono::milliseconds(point_ms);
-      const auto requested_goal_tolerance_ms =
-        static_cast<int64_t>(goal->goal_time_tolerance.sec) * 1000 +
-        goal->goal_time_tolerance.nanosec / 1000000;
-      const auto grace_ms = requested_goal_tolerance_ms > 0 ? requested_goal_tolerance_ms : 1000;
-      const auto deadline = target_time + std::chrono::milliseconds(grace_ms);
-      bool reached = false;
-      while (std::chrono::steady_clock::now() < deadline)
-      {
-        if (goal_handle->is_canceling())
-        {
-          emergency_stop();
-          fail(FollowJointTrajectory::Result::INVALID_GOAL, "trajectory cancelled; stop sent");
-          goal_handle->canceled(result);
-          moving_.store(false);
-          return;
-        }
-        if (std::chrono::steady_clock::now() < target_time)
-        {
-          std::this_thread::sleep_for(10ms);
-          continue;
-        }
-
+        return true;
+      };
+    const auto publish_feedback = [&](const auto &point, const bool enforce_tolerance) {
         bool within_tolerance = true;
         auto feedback = std::make_shared<FollowJointTrajectory::Feedback>();
         feedback->header.stamp = now();
@@ -461,36 +459,164 @@ void HxArmDriverNode::execute_trajectory(
             online_[index] = false;
             within_tolerance = false;
           }
-          const auto actual =
-            (static_cast<double>(last_ticks_[index]) - zero_ticks_[index]) /
-            (directions_[index] * ticks_per_radian_[index]);
+          const auto actual = joint_calibrations_[index].ticks_to_urdf(last_ticks_[index]);
           feedback->actual.positions.push_back(actual);
           feedback->error.positions[i] = point.positions[i] - actual;
-          const auto target_ticks = std::lround(
-            zero_ticks_[index] + directions_[index] * point.positions[i] * ticks_per_radian_[index]);
-          if (std::abs(static_cast<int>(last_ticks_[index]) - static_cast<int>(target_ticks)) > position_tolerance_ticks_)
+          if (enforce_tolerance)
           {
-            within_tolerance = false;
+            const auto target_ticks = std::lround(
+              joint_calibrations_[index].urdf_to_ticks(point.positions[i]));
+            // if (std::abs(static_cast<int>(last_ticks_[index]) - static_cast<int>(target_ticks)) >
+            //   position_tolerance_ticks_)
+            // {
+            //   within_tolerance = false;
+            // }
+            // joint3 允许 30 tick，其余关节使用 YAML 中的公共容差。
+            const int tolerance_ticks =
+              trajectory.joint_names[i] == "joint3"
+              ? 30
+              : position_tolerance_ticks_;
+
+            if (std::abs(static_cast<int>(last_ticks_[index]) - static_cast<int>(target_ticks)) >
+              tolerance_ticks)
+            {
+              within_tolerance = false;
+            }
           }
         }
         publish_state(last_ticks_);
         goal_handle->publish_feedback(feedback);
-        if (within_tolerance)
+        return within_tolerance;
+      };
+
+    auto next_feedback_time = std::chrono::steady_clock::now();
+    for (size_t point_index = 0; point_index < trajectory.points.size(); ++point_index)
+    {
+      const auto &point = trajectory.points[point_index];
+      if (cancelled())
+      {
+        return;
+      }
+
+      const int64_t point_ns = static_cast<int64_t>(point.time_from_start.sec) * 1000000000LL +
+        point.time_from_start.nanosec;
+      const bool final_point = point_index + 1 == trajectory.points.size();
+      if (first_point && point_ns == 0 && !final_point)
+      {
+        previous_ns = point_ns;
+        first_point = false;
+        continue;
+      }
+      first_point = false;
+      const auto segment_ms = static_cast<uint16_t>(std::clamp<int64_t>(
+          (point_ns - previous_ns + 999999) / 1000000, 20, 30000));
+      std::vector<HxPositionTarget> hx_targets;
+      hx_targets.reserve(trajectory.joint_names.size());
+
+      for (size_t i = 0; i < trajectory.joint_names.size(); ++i)
+      {
+        const auto index = joint_index_.at(trajectory.joint_names[i]);
+        const auto target = std::lround(
+          joint_calibrations_[index].urdf_to_ticks(point.positions[i]));
+        if (target < min_ticks_[index] || target > max_ticks_[index])
         {
-          reached = true;
+          throw std::out_of_range("trajectory target exceeds calibrated limit for " + trajectory.joint_names[i]);
+        }
+        const auto id = static_cast<uint8_t>(servo_ids_[index]);
+        if (servo_protocols_[index] == "v3")
+        {
+          if (target < 0 || target > 1000)
+          {
+            throw std::out_of_range("V3 target must be in 0..1000 for " + trajectory.joint_names[i]);
+          }
+          bus_->send(encode_v3_position_command(id, static_cast<uint16_t>(target), segment_ms));
+        }
+        else
+        {
+          hx_targets.push_back({id, static_cast<int16_t>(target), goal_speed_, goal_acceleration_});
+        }
+      }
+      if (!hx_targets.empty())
+      {
+        bus_->send(encode_hx_sync_position_command(hx_targets));
+        bus_->send(encode_hx_action_command());
+      }
+
+      const auto target_time = start + std::chrono::nanoseconds(point_ns);
+      if (!final_point)
+      {
+        while (std::chrono::steady_clock::now() < target_time)
+        {
+          if (cancelled())
+          {
+            return;
+          }
+          const auto current_time = std::chrono::steady_clock::now();
+          if (current_time >= next_feedback_time)
+          {
+            // Intermediate points are streamed by time; feedback is published
+            // without requiring the servos to settle at every sample.
+            publish_feedback(point, false);
+            next_feedback_time = current_time + 50ms;
+          }
+          std::this_thread::sleep_for(5ms);
+        }
+        previous_ns = point_ns;
+        continue;
+      }
+
+      const auto final_wait_start = std::max(target_time, std::chrono::steady_clock::now());
+      const auto deadline = final_wait_start + std::chrono::milliseconds(grace_ms);
+      while (std::chrono::steady_clock::now() < final_wait_start)
+      {
+        if (cancelled())
+        {
+          return;
+        }
+        const auto current_time = std::chrono::steady_clock::now();
+        if (current_time >= next_feedback_time)
+        {
+          publish_feedback(point, false);
+          next_feedback_time = current_time + 50ms;
+        }
+        std::this_thread::sleep_for(5ms);
+      }
+
+      bool reached = false;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        if (cancelled())
+        {
+          return;
+        }
+        reached = publish_feedback(point, true);
+        if (reached)
+        {
           break;
         }
         std::this_thread::sleep_for(50ms);
       }
       if (!reached)
       {
-        fail(FollowJointTrajectory::Result::GOAL_TOLERANCE_VIOLATED,
-             "servos did not reach trajectory point within the allowed time");
+        std::ostringstream error_message;
+        error_message << "final servos did not reach the goal within " << grace_ms << " ms;";
+        for (size_t i = 0; i < trajectory.joint_names.size(); ++i)
+        {
+          const auto index = joint_index_.at(trajectory.joint_names[i]);
+          const auto target_ticks = std::lround(
+            joint_calibrations_[index].urdf_to_ticks(point.positions[i]));
+          const auto error_ticks = static_cast<int>(target_ticks) - static_cast<int>(last_ticks_[index]);
+          error_message << ' ' << trajectory.joint_names[i]
+                        << " actual=" << last_ticks_[index]
+                        << " target=" << target_ticks
+                        << " error=" << error_ticks << " ticks;";
+        }
+        fail(FollowJointTrajectory::Result::GOAL_TOLERANCE_VIOLATED, error_message.str());
         goal_handle->abort(result);
         moving_.store(false);
         return;
       }
-      previous_ms = point_ms;
+      previous_ns = point_ns;
     }
 
     result->error_code = FollowJointTrajectory::Result::SUCCESSFUL;
@@ -512,7 +638,7 @@ void HxArmDriverNode::handle_accepted(const std::shared_ptr<GoalHandleMoveJoints
               }}.detach();
 }
 
-bool HxArmDriverNode::validate_goal(const MoveJoints::Goal &goal, std::string &reason) const
+bool HxArmDriverNode::validate_goal(const MoveJoints::Goal &goal, std::string &reason)
 {
   if (!allow_motion_)
   {
@@ -522,6 +648,12 @@ bool HxArmDriverNode::validate_goal(const MoveJoints::Goal &goal, std::string &r
   if (goal.joint_names.empty() || goal.joint_names.size() != goal.positions.size())
   {
     reason = "joint_names and positions must be non-empty and same length";
+    return false;
+  }
+  if ((!goal.start_delays_ms.empty() && goal.start_delays_ms.size() != goal.joint_names.size()) ||
+    (!goal.durations_ms.empty() && goal.durations_ms.size() != goal.joint_names.size()))
+  {
+    reason = "start_delays_ms and durations_ms must be empty or match joint_names";
     return false;
   }
   if (!goal.speeds.empty() && goal.speeds.size() != goal.joint_names.size())
@@ -550,9 +682,28 @@ bool HxArmDriverNode::validate_goal(const MoveJoints::Goal &goal, std::string &r
       reason = "each speed must be 0..3400";
       return false;
     }
-    if (!online_[joint_index_.at(goal.joint_names[i])])
+    const auto index = joint_index_.at(goal.joint_names[i]);
+    // An idle poll can lose one reply immediately before the home request.
+    // Re-read only requested offline joints before rejecting; never command
+    // motion for a joint that still has no valid position response.
+    if (!online_[index] && !refresh_position(index))
     {
-      reason = "requested servo is offline";
+      reason = "requested servo is offline after 3 position reads: " + goal.joint_names[i] +
+        " (ID " + std::to_string(servo_ids_[index]) + ")";
+      return false;
+    }
+  }
+  for (size_t i = 0; i < goal.joint_names.size(); ++i)
+  {
+    const auto index = joint_index_.at(goal.joint_names[i]);
+    const auto delay_ms = goal.start_delays_ms.empty() ? 0U : goal.start_delays_ms[i];
+    const auto travel_ms = goal.durations_ms.empty() ? static_cast<uint32_t>(ms) :
+      static_cast<uint32_t>(goal.durations_ms[i]);
+    if (delay_ms >= static_cast<uint32_t>(ms) || travel_ms < 20U || travel_ms > 30000U ||
+      (goal.wait_for_completion && servo_protocols_[index] == "v3" &&
+      delay_ms + travel_ms > static_cast<uint32_t>(ms)))
+    {
+      reason = "per-joint delay/duration does not fit within the goal duration";
       return false;
     }
   }
@@ -566,7 +717,8 @@ std::vector<int16_t> HxArmDriverNode::goal_to_ticks(const MoveJoints::Goal &goal
   for (size_t i = 0; i < goal.joint_names.size(); ++i)
   {
     const auto index = joint_index_.at(goal.joint_names[i]);
-    const auto target = std::lround(zero_ticks_[index] + directions_[index] * goal.positions[i] * ticks_per_radian_[index]);
+    // /move_joints retains native radians so an all-zero goal still means folded home.
+    const auto target = std::lround(joint_calibrations_[index].native_to_ticks(goal.positions[i]));
     if (target < min_ticks_[index] || target > max_ticks_[index])
     {
       throw std::out_of_range("target exceeds calibrated HX limit for " + goal.joint_names[i]);
@@ -586,7 +738,7 @@ sensor_msgs::msg::JointState HxArmDriverNode::state_from_ticks(const std::vector
 
   for (size_t i = 0; i < ticks.size(); ++i)
   {
-    state.position[i] = (static_cast<double>(ticks[i]) - zero_ticks_[i]) / (directions_[i] * ticks_per_radian_[i]);
+    state.position[i] = joint_calibrations_[i].ticks_to_urdf(ticks[i]);
   }
   return state;
 }
@@ -595,6 +747,22 @@ void HxArmDriverNode::publish_state(const std::vector<int16_t> &ticks)
 {
   joint_state_pub_->publish(state_from_ticks(ticks));
 }
+
+bool HxArmDriverNode::refresh_position(const size_t index)
+{
+  for (unsigned attempt = 0; attempt < 3; ++attempt)
+  {
+    if (const auto observed = read_position(index); observed)
+    {
+      last_ticks_[index] = *observed;
+      online_[index] = true;
+      return true;
+    }
+  }
+  online_[index] = false;
+  return false;
+}
+
 std::optional<int16_t> HxArmDriverNode::read_position(const size_t index)
 {
   const auto id = static_cast<uint8_t>(servo_ids_[index]);
@@ -624,11 +792,17 @@ void HxArmDriverNode::write_checked(const uint8_t id, const std::vector<uint8_t>
 
   if (!reply || reply->size() < 6U || (*reply)[2] != id)
   {
-    throw std::runtime_error("no status reply while " + operation + " servo ID " + std::to_string(id));
+    throw std::runtime_error(
+      "no status reply while " + operation +
+      " servo ID " + std::to_string(id));
   }
+
   if ((*reply)[4] != 0U)
   {
-    throw std::runtime_error("HX error " + std::to_string((*reply)[4]) + " while " + operation + " servo ID " + std::to_string(id));
+    throw std::runtime_error(
+      "HX error " + std::to_string((*reply)[4]) +
+      " while " + operation +
+      " servo ID " + std::to_string(id));
   }
 }
 void HxArmDriverNode::set_position_mode(const uint8_t id)
@@ -644,95 +818,133 @@ void HxArmDriverNode::execute(const std::shared_ptr<GoalHandleMoveJoints> &goal_
 {
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<MoveJoints::Result>();
+  const auto cancel_requested = [&]() {
+      if (!goal_handle->is_canceling()) {return false;}
+      if (goal->hold_on_cancel) {
+        try {
+          hold_requested_joints(*goal);
+        } catch (...) {
+          emergency_stop();
+          throw;
+        }
+      } else {
+        emergency_stop();
+      }
+      result->success = false;
+      result->message = goal->hold_on_cancel ?
+        "motion cancelled; requested joints held for recovery" :
+        "motion cancelled and torque disabled";
+      result->final_state = state_from_ticks(last_ticks_);
+      // Release the busy flag before reporting terminal cancellation: a
+      // recovery client may submit its home goal immediately on that result.
+      moving_.store(false);
+      goal_handle->canceled(result);
+      return true;
+    };
 
   try {
     const auto ticks = goal_to_ticks(*goal);
     const auto duration_ms = static_cast<uint16_t>(
       std::clamp<int64_t>(static_cast<int64_t>(goal->duration.sec) * 1000 + goal->duration.nanosec / 1000000, 1, 30000));
-    if (goal->joint_names.size() == 1U)
+    // Validate every V3 target before sending any joint command.
+    for (const auto &name : goal->joint_names)
     {
-      const auto index = joint_index_.at(goal->joint_names.front());
-      const auto id = static_cast<uint8_t>(servo_ids_[index]);
-      const auto speed = goal->speeds.empty() ? goal_speed_ : goal->speeds.front();
-      if (servo_protocols_[index] == "v3")
+      const auto index = joint_index_.at(name);
+      if (servo_protocols_[index] == "v3" && (ticks[index] < 0 || ticks[index] > 1000))
       {
-        if (ticks[index] < 0 || ticks[index] > 1000)
-        {
-          throw std::out_of_range("V3 target position must be 0..1000");
-        }
-        bus_->send(encode_v3_position_command(id, static_cast<uint16_t>(ticks[index]), duration_ms));
-      }
-      else
-      {
-        write_checked(id, encode_hx_position_command(id, ticks[index], speed, goal_acceleration_), "writing target position to");
+        throw std::out_of_range("V3 target position must be 0..1000 for " + name);
       }
     }
-    else
+    // Use the same immediate HX WRITE as single-joint control, without
+    // depending on REG_WRITE/broadcast ACTION firmware support.
+    auto stationary_not_before = std::chrono::steady_clock::now();
     {
-      std::vector<HxPositionTarget> targets;
-      std::vector<size_t> target_indices;
-      targets.reserve(goal->joint_names.size());
-      target_indices.reserve(goal->joint_names.size());
-      bool hx_targets_staged = false;
-      for (size_t i = 0; i < goal->joint_names.size(); ++i)
+      const auto dispatch_start = std::chrono::steady_clock::now();
+      std::vector<uint16_t> delays(goal->joint_names.size(), 0U);
+      std::vector<uint16_t> travel_times(goal->joint_names.size(), duration_ms);
+      if (!goal->start_delays_ms.empty())
       {
-        const auto &name = goal->joint_names[i];
-        const auto index = joint_index_.at(name);
-        const auto speed = goal->speeds.empty() ? goal_speed_ : goal->speeds[i];
-        targets.push_back({static_cast<uint8_t>(servo_ids_[index]), ticks[index], speed, goal_acceleration_});
-        target_indices.push_back(index);
+        delays = goal->start_delays_ms;
       }
-      for (size_t target_index = 0; target_index < targets.size(); ++target_index)
+      if (!goal->durations_ms.empty())
       {
-        const auto &target = targets[target_index];
-        if (servo_protocols_[target_indices[target_index]] == "v3")
+        travel_times = goal->durations_ms;
+      }
+      auto dispatch_times = delays;
+      std::sort(dispatch_times.begin(), dispatch_times.end());
+      dispatch_times.erase(std::unique(dispatch_times.begin(), dispatch_times.end()), dispatch_times.end());
+      for (const auto delay_ms : dispatch_times)
+      {
+        const auto dispatch_at = dispatch_start + std::chrono::milliseconds(delay_ms);
+        while (std::chrono::steady_clock::now() < dispatch_at)
         {
-          if (target.position < 0 || target.position > 1000)
+          if (cancel_requested()) {return;}
+          std::this_thread::sleep_for(5ms);
+        }
+        for (size_t i = 0; i < goal->joint_names.size(); ++i)
+        {
+          if (cancel_requested()) {return;}
+          if (delays[i] != delay_ms)
           {
-            throw std::out_of_range("V3 target position must be 0..1000");
+            continue;
           }
-          bus_->send(encode_v3_position_command(target.id, static_cast<uint16_t>(target.position), duration_ms));
-        }
-        else
-        {
-          write_checked(target.id,
-                        encode_hx_reg_position_command(target.id, target.position, target.speed, target.acceleration),
-                        "staging synchronized target for");
-          hx_targets_staged = true;
+          const auto index = joint_index_.at(goal->joint_names[i]);
+          const auto id = static_cast<uint8_t>(servo_ids_[index]);
+          if (servo_protocols_[index] == "v3")
+          {
+            bus_->send(encode_v3_position_command(
+              id, static_cast<uint16_t>(ticks[index]), travel_times[i]));
+            // V3 uses a timed move. Quantized readings during a very slow move
+            // can look stationary; wait out its commanded travel time first.
+            if (std::abs(static_cast<int>(last_ticks_[index]) - ticks[index]) >
+                stationary_tolerance_ticks_)
+            {
+              stationary_not_before = std::max(stationary_not_before,
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(travel_times[i]));
+            }
+          }
+          else
+          {
+            const auto speed = goal->speeds.empty() ? goal_speed_ : goal->speeds[i];
+            write_checked(
+              id, encode_hx_position_command(id, ticks[index], speed, goal_acceleration_),
+              "writing target position to");
+          }
         }
       }
-      if (hx_targets_staged)
-      {
-        bus_->send(encode_hx_action_command());
-      }
-      RCLCPP_INFO(get_logger(), "mixed HX/V3 position commands sent to %zu servos", targets.size());
+      RCLCPP_INFO(get_logger(), "position commands dispatched directly to %zu servos",
+        goal->joint_names.size());
     }
     const auto duration = std::chrono::milliseconds(goal->duration.sec * 1000 + goal->duration.nanosec / 1000000);
     const auto start = std::chrono::steady_clock::now();
+    stationary_not_before = std::max(stationary_not_before,
+      start + std::chrono::milliseconds(stationary_min_wait_ms_));
+    JointStationaryMonitor stationary_monitor(
+      stationary_tolerance_ticks_, std::chrono::milliseconds(stationary_duration_ms_));
+    bool completed_stationary = false;
     bool reached_target = !goal->wait_for_completion;
+    std::vector<bool> feedback_received(servo_ids_.size(), false);
     while (goal->wait_for_completion && std::chrono::steady_clock::now() - start < duration)
     {
-      if (goal_handle->is_canceling())
-      {
-        emergency_stop();
-        result->success = false;
-        result->message = "motion cancelled and torque disabled";
-        result->final_state = state_from_ticks(last_ticks_);
-        goal_handle->canceled(result);
-        moving_.store(false);
-        return;
-      }
+      if (cancel_requested()) {return;}
       bool all_within_tolerance = true;
+      bool all_fresh = true;
+      std::vector<int16_t> observed_positions;
       for (const auto &name : goal->joint_names)
       {
         const auto index = joint_index_.at(name);
         const auto observed = read_position(index);
+        feedback_received[index] = observed.has_value();
+        observed_positions.push_back(observed.value_or(last_ticks_[index]));
         if (!observed)
         {
+          all_fresh = false;
+          online_[index] = false;
           all_within_tolerance = false;
           continue;
         }
         last_ticks_[index] = *observed;
+        online_[index] = true;
         if (std::abs(static_cast<int>(*observed) - static_cast<int>(ticks[index])) > position_tolerance_ticks_)
         {
           all_within_tolerance = false;
@@ -742,8 +954,15 @@ void HxArmDriverNode::execute(const std::shared_ptr<GoalHandleMoveJoints> &goal_
       feedback->progress = std::min(1.0F, static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()) / duration.count());
       feedback->current_state = state_from_ticks(last_ticks_);
       goal_handle->publish_feedback(feedback);
-      if (all_within_tolerance)
+      publish_state(last_ticks_);
+      const auto observed_at = std::chrono::steady_clock::now();
+      const bool stationary = stationary_monitor.update(observed_positions, all_fresh, observed_at);
+      if (cancel_requested()) {return;}
+      const bool stationary_fallback = goal->complete_when_stationary && stationary &&
+        observed_at >= stationary_not_before;
+      if (all_within_tolerance || stationary_fallback)
       {
+        completed_stationary = !all_within_tolerance;
         reached_target = true;
         break;
       }
@@ -753,28 +972,95 @@ void HxArmDriverNode::execute(const std::shared_ptr<GoalHandleMoveJoints> &goal_
     {
       publish_state(last_ticks_);
       result->success = false;
-      result->message = "motion timeout: one or more joints did not reach target";
+      std::ostringstream detail;
+      detail << "motion timeout: ";
+      if (goal->complete_when_stationary)
+      {
+        detail << "stationary range<=" << stationary_tolerance_ticks_ << " ticks for "
+               << stationary_duration_ms_ << " ms not confirmed; ";
+      }
+      detail << "position tolerance=" << position_tolerance_ticks_ << " ticks;";
+      for (const auto &name : goal->joint_names)
+      {
+        const auto index = joint_index_.at(name);
+        const auto error_ticks = static_cast<int>(last_ticks_[index]) - static_cast<int>(ticks[index]);
+        if (!feedback_received[index])
+        {
+          detail << " " << name << " no fresh feedback, last=" << last_ticks_[index]
+                 << " target=" << ticks[index] << " ticks;";
+        }
+        else if (goal->complete_when_stationary || std::abs(error_ticks) > position_tolerance_ticks_)
+        {
+          detail << " " << name << " actual=" << last_ticks_[index]
+                 << " target=" << ticks[index] << " error=" << error_ticks << " ticks;";
+        }
+      }
+      result->message = detail.str();
       result->final_state = state_from_ticks(last_ticks_);
-      goal_handle->abort(result);
       moving_.store(false);
+      goal_handle->abort(result);
       return;
     }
     if (!goal->wait_for_completion)
     {
-      last_ticks_ = ticks;
+      for (const auto &name : goal->joint_names)
+      {
+        const auto index = joint_index_.at(name);
+        if (const auto observed = read_position(index); observed)
+        {
+          last_ticks_[index] = *observed;
+          online_[index] = true;
+        }
+      }
     }
     publish_state(last_ticks_);
     result->success = true;
     result->message = goal->wait_for_completion ? "HX target reached" : "HX motion command sent";
+    if (completed_stationary)
+    {
+      std::ostringstream detail;
+      detail << "HX motion completed: requested joints stationary; range<="
+             << stationary_tolerance_ticks_ << " ticks for " << stationary_duration_ms_
+             << " ms; target errors:";
+      for (const auto &name : goal->joint_names)
+      {
+        const auto index = joint_index_.at(name);
+        detail << " " << name << "=" << static_cast<int>(last_ticks_[index]) - ticks[index]
+               << " ticks;";
+      }
+      result->message = detail.str();
+      RCLCPP_INFO(get_logger(), "%s", result->message.c_str());
+    }
     result->final_state = state_from_ticks(last_ticks_);
+    moving_.store(false);
     goal_handle->succeed(result);
   }
   catch (const std::exception &error) {result->success = false;
                                        result->message = error.what();
                                        result->final_state = state_from_ticks(last_ticks_);
+                                       moving_.store(false);
                                        goal_handle->abort(result);
   }
-  moving_.store(false);
+}
+
+void HxArmDriverNode::hold_requested_joints(const MoveJoints::Goal &goal)
+{
+  for (const auto &name : goal.joint_names)
+  {
+    const auto index = joint_index_.at(name);
+    const auto id = static_cast<uint8_t>(servo_ids_[index]);
+    if (servo_protocols_[index] == "v3")
+    {
+      bus_->send(encode_v3_stop_command(id));
+      continue;
+    }
+    if (!refresh_position(index))
+    {
+      throw std::runtime_error("cannot hold " + name + ": no fresh position feedback");
+    }
+    write_checked(id, encode_hx_position_command(id, last_ticks_[index], goal_speed_, goal_acceleration_),
+      "holding cancelled motion for");
+  }
 }
 
 void HxArmDriverNode::emergency_stop()

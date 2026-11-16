@@ -23,7 +23,9 @@ public:
     const std::string &base_link,
     const std::string &tip_link,
     unsigned int max_iterations = 200,
-    double tolerance = 1e-3);//1mm
+    double tolerance = 1e-3,
+    const std::vector<double> &lower_limits = {},
+    const std::vector<double> &upper_limits = {});
 
   UrdfKinematics(const UrdfKinematics &) = delete;
   UrdfKinematics &operator=(const UrdfKinematics &) = delete;
@@ -44,14 +46,25 @@ public:
   const double target_pitch,
   const double target_roll) const;
   
-  //改进pitch->水平面
+  // Geometry-based solver for this robot's yaw/pitch/pitch/pitch/tool-roll chain.
+  // Enumerates base, tool-direction, and elbow branches; verifies original-URDF FK.
+  std::vector<double> inverse_xyz_tilt_joint5_analytic(
+    const std::vector<double> &seed,
+    double target_x, double target_y, double target_z,
+    double target_tool_tilt, double target_joint5) const;
+
+  // Tool tilt is measured from the horizontal plane. Try the supplied seed first;
+  // on non-convergence, use deterministic fallback seeds and prefer the solution
+  // closest to the supplied seed. These seeds never command physical motion.
+  // max_attempts includes the supplied seed; 1 disables fallback (valid: 1..64).
   std::vector<double> inverse_xyz_tilt_joint5(
   const std::vector<double> &seed,
   double target_x,
   double target_y,
   double target_z,
   double target_tool_tilt,
-  double target_joint5) const;
+  double target_joint5,
+  unsigned int max_attempts = 16U) const;
 
   const std::vector<std::string> &joint_names() const noexcept;
   const std::vector<double> &lower_limits() const noexcept;
@@ -59,6 +72,14 @@ public:
   std::size_t joint_count() const noexcept;
 
 private:
+  std::vector<double> inverse_xyz_tilt_joint5_single_seed(
+    const std::vector<double> &seed,
+    double target_x,
+    double target_y,
+    double target_z,
+    double target_tool_tilt,
+    double target_joint5) const;
+
   KDL::JntArray to_kdl(const std::vector<double> &values) const;
   std::vector<double> from_kdl(const KDL::JntArray &values) const;
 

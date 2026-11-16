@@ -4,8 +4,21 @@ float64[] positions
 # Optional per-joint native HX-30HM goal speed (0..3400). Empty uses the
 # driver's configured goal_speed for every joint.
 uint16[] speeds
+# Optional per-joint delay from goal acceptance before dispatch, in milliseconds.
+# Empty means all joints start immediately.
+uint16[] start_delays_ms
+# Optional per-joint V3 travel duration. HX joints use their speed register.
+# Empty uses the goal-wide duration for V3 joints.
+uint16[] durations_ms
 builtin_interfaces/Duration duration
 bool wait_for_completion
+# Also allow completion when every requested joint has fresh, stable feedback,
+# even outside position_tolerance_ticks. Normal target-position checking remains
+# active; false disables only this stationary fallback.
+bool complete_when_stationary
+# Opt in to a position hold on cancellation so automatic harvest recovery can
+# send a subsequent home goal. False preserves legacy torque-off cancellation.
+bool hold_on_cancel
 ---
 bool success
 string message

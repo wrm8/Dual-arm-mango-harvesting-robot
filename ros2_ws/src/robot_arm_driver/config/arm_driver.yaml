@@ -10,11 +10,20 @@ robot_arm_driver:
     # ID 1/3/4: HX-30HM; ID 2: HX-65HM; ID 5/6: HX-12HM.
     # HX-30HM/HX-65HM use FF FF; HX-12HM uses 55 55 V3 protocol.
     servo_protocols: [hx, hx, hx, hx, v3, v3]
-    # Provisional calibration. HX uses signed encoder ticks; V3 uses 0..1000.
-    # Replace zero_ticks and directions after mechanically setting each joint zero.
-    zero_ticks: [1908.0, 2070.0, 1646.0, 1613.0, 515.0, 755.0]
+    # Native folded-home reference used by /move_joints (all-zero positions).
+    # 实物弯折零位，保留原值
+    zero_ticks: [1908.0, 2012.0, 1650.0, 1491.0, 518.0, 760.0]
+
+    # 实物摆成 URDF 全零姿态时测得的 tick
+    urdf_zero_ticks: [1887.0, 2384.0, 3602.0, 1889.0, 518.0, 760.0]
+    
+    # Model-zero reference for /joint_states and FollowJointTrajectory (IK / MoveIt).
+    # Omit urdf_zero_ticks to reuse zero_ticks until model-zero calibration is confirmed.
+    # ROS cannot infer the parameter type from []; do not configure an empty array.
+    # Candidate measured at URDF q=0 on 2026-11-05:
+    # [1887.0, 2384.0, 3602.0, 1889.0, 518.0, 760.0]
     ticks_per_radian: [651.8986, 651.8986, 651.8986, 651.8986, 238.7324, 238.7324]
-    directions: [1.0, 1.0, 1.0, 1.0, 1.0, -1.0]
+    directions: [1.0, 1.0, -1.0, 1.0, 1.0, 1.0]
     # HX-HM protocol range. Replace these with measured mechanical limits
     # after joint-zero calibration.
     # 变大方向；顺 顺 顺 顺 顺 顺 逆

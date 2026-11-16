@@ -164,6 +164,17 @@ JSON 中 `trunks` 是树干原始检测，`tree_alignment` 是经过 0.40–0.60
 ros2 action send_goal /shift_lane robot_arm_interfaces/action/ShiftLane \
 "{stage_id: 6, direction: -1, distance_m: 0.30, max_speed_mps: 0.60, safety_distance_m: 0.04, wall_sensor: 0, wall_target_m: 0.04, wall_enable_tolerance_m: 0.05, disable_wall_control_on_side_distance: true, wall_control_cancel_side_distance_m: 0.25, wall_control_cancel_side_tolerance_m: 0.02, vision_stop_enabled: true}" \
 --feedback
+# 视觉启动
+cd ~/wrm/Dual-arm-mango-harvesting-robot/ros2_ws/src/robot_vision
+source tools/env_jetson.sh
+cd yolo_mango
+python3 vision.py \
+  --weights ../models/best.pt \
+  --source realsense \
+  --device 0 \
+  --show
+
+
 
 ##### 视觉调试步骤，为什么识别到芒果，却没有减速
 wrm@wrm-desktop:~/wrm/Dual-arm-mango-harvesting-robot/ros2_ws$ ros2 topic info -v /vision/mango_target

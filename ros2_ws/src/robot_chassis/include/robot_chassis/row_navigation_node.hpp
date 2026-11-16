@@ -8,10 +8,12 @@
 #include "robot_arm_interfaces/msg/stage_feedback.hpp"
 #include "robot_arm_interfaces/msg/vision_row_observation.hpp"
 #include "robot_arm_interfaces/msg/vision_stop_state.hpp"
+#include "robot_arm_interfaces/msg/harvest_result.hpp"
 #include "robot_chassis/vision_stop_controller.hpp"
 
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
@@ -43,6 +45,10 @@ private:
     nav_msgs::msg::Odometry odom;
     bool have_ultrasonic{false};
     bool have_odom{false};
+    double imu_yaw_rad{0.0};
+    bool have_imu{false};
+    builtin_interfaces::msg::Time imu_stamp;
+    std::chrono::steady_clock::time_point imu_time{};
     std::chrono::steady_clock::time_point ultrasonic_time{};
     std::chrono::steady_clock::time_point odom_time{};
   };
@@ -79,6 +85,8 @@ private:
 
   void ultrasonic_callback(const robot_arm_interfaces::msg::UltrasonicArray::SharedPtr message);
   void odom_callback(const nav_msgs::msg::Odometry::SharedPtr message);
+  void imu_callback(const sensor_msgs::msg::Imu::SharedPtr message);
+  double heading(const Sensors &snapshot) const;
   void stage_feedback_callback(const robot_arm_interfaces::msg::StageFeedback::SharedPtr message);
   void begin_stage(uint8_t stage_id);
   double task_yaw_reference(double observed_yaw);
@@ -117,6 +125,7 @@ private:
     double max_acceleration_mps2;
     double max_deceleration_mps2;
     int ultrasonic_filter_window;
+    double first_row_left_enable_distance_m;
   };
 
   YawControlParameters yaw_control_parameters() const;
@@ -124,6 +133,9 @@ private:
 
   double loop_hz_{20.0};
   double sensor_timeout_s_{0.3};
+  bool use_external_imu_{true};
+  std::string external_imu_topic_{"/imu/wit/data"};
+  double imu_timeout_s_{0.3};
   double side_kp_{1.2};
   double yaw_kp_{1.0};
   double yaw_ki_{0.05};
@@ -131,6 +143,7 @@ private:
   double max_acceleration_mps2_{0.8};
   double max_deceleration_mps2_{0.8};
   int ultrasonic_filter_window_{3};
+  double first_row_left_enable_distance_m_{0.10};
   double shift_wall_enable_tolerance_m_{0.10};
   double shift_wall_cancel_side_distance_m_{0.25};
   double shift_wall_cancel_side_tolerance_m_{0.02};
@@ -164,6 +177,11 @@ private:
   robot_arm_interfaces::msg::VisionRowObservation vision_observation_;
   bool have_vision_observation_{false};
   std::chrono::steady_clock::time_point vision_observation_time_{};
+  uint64_t harvest_stop_id_{0};  // protected by vision_mutex_
+  uint8_t harvest_stage_id_{0};
+  bool harvest_result_ready_{false};
+  robot_arm_interfaces::msg::HarvestResult harvest_result_;
+  uint64_t stop_id_sequence_{0};
   mutable std::mutex phase_mutex_;
   mutable std::mutex command_mutex_;
   geometry_msgs::msg::Twist last_command_;
@@ -176,7 +194,9 @@ private:
 
   rclcpp::Subscription<robot_arm_interfaces::msg::UltrasonicArray>::SharedPtr ultrasonic_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<robot_arm_interfaces::msg::VisionRowObservation>::SharedPtr vision_sub_;
+  rclcpp::Subscription<robot_arm_interfaces::msg::HarvestResult>::SharedPtr harvest_result_sub_;
   rclcpp::Publisher<robot_arm_interfaces::msg::VisionStopState>::SharedPtr vision_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_pub_;
   rclcpp::Publisher<robot_arm_interfaces::msg::RouteCommand>::SharedPtr route_command_pub_;

@@ -26,7 +26,7 @@ from frame_transform import rotate_image, rotated_pixel_to_source
 from stability import StabilityGate
 from vision import detect
 from target_contract import TargetTracker, load_calibration
-from harvest_observation import fruits_in_depth, tree_observation, selected_targets
+from harvest_observation import fruits_in_depth, tree_observation, selected_targets, selected_camera_targets
 
 
 class MangoVisionNode(Node):
@@ -57,8 +57,10 @@ class MangoVisionNode(Node):
         validate_config(self.cfg)
         self.validate_live_settings(p)
         self.matrix = load_calibration(p['calibration'], p['target_frame']) if p['calibration'] else None
-        if p['publish_targets'] and (self.matrix is None or p['source'] != 'realsense'):
-            raise ValueError('publish_targets requires calibrated RealSense depth and camera-to-base calibration')
+        if p['publish_targets'] and p['source'] != 'realsense':
+            raise ValueError('publish_targets requires RealSense depth')
+        if p['publish_legacy_target'] and self.matrix is None:
+            raise ValueError('publish_legacy_target requires a calibrated single-base transform')
         weights = Path(p['weights'] or share / 'models/best.pt')
         if not weights.is_file():
             raise FileNotFoundError(f'Trained weights not found: {weights}')
@@ -120,8 +122,10 @@ class MangoVisionNode(Node):
             candidate[param.name] = param.value
         try:
             self.validate_live_settings(candidate)
-            if candidate['publish_targets'] and (self.matrix is None or candidate['source'] != 'realsense'):
-                raise ValueError('Publishing targets requires calibrated RealSense depth')
+            if candidate['publish_targets'] and candidate['source'] != 'realsense':
+                raise ValueError('Publishing targets requires RealSense depth')
+            if candidate['publish_legacy_target'] and self.matrix is None:
+                raise ValueError('Publishing the legacy target requires a calibrated transform')
         except (ValueError, TypeError) as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         self.settings.update(candidate)
@@ -138,7 +142,8 @@ class MangoVisionNode(Node):
             return
         entered = (message.state == VisionStopState.HOLDING and
                    (previous is None or previous.state != message.HOLDING or
-                    previous.stage_id != message.stage_id))
+                    previous.stage_id != message.stage_id or
+                    previous.stop_id != message.stop_id))
         if entered or message.state != VisionStopState.HOLDING:
             self.gate.reset()
             self.snapshot = None
@@ -191,7 +196,7 @@ class MangoVisionNode(Node):
         scene.header.frame_id = 'camera_color_optical_frame'
         self.scene_pub.publish(scene)
         invalid = HarvestTargetArray()
-        invalid.header = message.header
+        invalid.header = scene.header
         self.harvest_pub.publish(invalid)
         self.snapshot = None
 
@@ -265,12 +270,13 @@ class MangoVisionNode(Node):
                 message.valid = True
             self.target_pub.publish(message)
             if holding and stable and p['publish_targets'] and self.snapshot is None:
-                selected = selected_targets(result, nearby, self.matrix, p['min_target_confidence'])
+                selected = selected_camera_targets(result, nearby, p['min_target_confidence'])
                 if selected is not None:
                     self.snapshot = HarvestTargetArray()
                     self.snapshot.header.stamp = acquired.to_msg()
-                    self.snapshot.header.frame_id = p['target_frame']
+                    self.snapshot.header.frame_id = 'camera_color_optical_frame'
                     self.snapshot.stage_id = self.stop_state.stage_id
+                    self.snapshot.stop_id = self.stop_state.stop_id
                     self.snapshot.valid = True
                     for item in selected:
                         fruit = HarvestTarget()
@@ -287,7 +293,7 @@ class MangoVisionNode(Node):
             else:
                 empty = HarvestTargetArray()
                 empty.header.stamp = acquired.to_msg()
-                empty.header.frame_id = p['target_frame']
+                empty.header.frame_id = 'camera_color_optical_frame'
                 self.harvest_pub.publish(empty)
             self.frame += 1
             payload = {'frame': self.frame, 'decision': result, 'temporal_stable': stable,

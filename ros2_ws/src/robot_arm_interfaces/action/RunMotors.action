@@ -1,0 +1,14 @@
+# Set the selected arm end-effector motors in parallel (unselected outputs stop).
+string[] arms
+# Duty fraction, not a measured RPM. 1.0 is full PWM duty.
+float64 duty_cycle
+# 0 = keep running until stop service/new command/node exit; >0 = timed operation.
+float64 duration_s
+# Encoder mode: duration_s is a positive overall timeout, revolutions is relative.
+bool use_encoder
+float64 revolutions
+---
+bool success
+string message
+---
+float64 elapsed_s

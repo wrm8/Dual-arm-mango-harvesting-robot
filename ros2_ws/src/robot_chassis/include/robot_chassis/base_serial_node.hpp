@@ -1,5 +1,7 @@
 #pragma once
 
+#include "robot_chassis/yaw_increment_filter.hpp"
+
 #include "robot_arm_interfaces/msg/base_state.hpp"
 #include "robot_arm_interfaces/msg/wheel_state.hpp"
 #include "robot_arm_interfaces/msg/route_command.hpp"
@@ -33,6 +35,7 @@ private:
   void process_command(const geometry_msgs::msg::Twist &command, uint8_t stage_id);
   void watchdog_callback();
   void read_loop();
+  YawIncrementFilter::Sample update_yaw(double raw_yaw);
   void parse_line(const std::string &line);
   void publish_state();
   void open_serial();
@@ -82,8 +85,14 @@ private:
   std::array<double, 4> wheel_position_m_{{0.0, 0.0, 0.0, 0.0}};
   std::array<int32_t, 4> wheel_encoder_delta_{{0, 0, 0, 0}};
   bool have_feedback_{false};
+  YawIncrementFilter yaw_filter_;  // Updated under state_mutex_ by serial feedback.
   bool have_previous_yaw_{false};
-  double previous_yaw_rad_{0.0};
+  double yaw_deadband_rad_{0.0001};
+  double yaw_filter_startup_delay_s_{5.0};
+  std::chrono::steady_clock::time_point yaw_filter_enable_time_{};
+  std::chrono::steady_clock::time_point last_yaw_feedback_time_{};
+  bool have_yaw_feedback_{false};
+  bool yaw_filter_enabled_{false};
   std::chrono::steady_clock::time_point last_feedback_time_{};
   bool have_odom_{false};
   bool have_imu_{false};

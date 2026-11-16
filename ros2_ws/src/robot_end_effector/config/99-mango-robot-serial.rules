@@ -1,0 +1,6 @@
+# Jetson devices verified on 2026-11-15. Match each STM32 by its unique USB serial.
+# Replace these serial values when replacing a board; ttyCH343USB indexes may change.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5CF0016103", SYMLINK+="stm32_chassis", GROUP="dialout", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", ATTRS{serial}=="5C2C070402", SYMLINK+="stm32_striker", GROUP="dialout", MODE="0660"
+# Preserve the existing arm-adapter rule.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="robot_arm", GROUP="dialout", MODE="0660"
